@@ -6,7 +6,7 @@ fn main() {
   let lines: Vec<String> = io::stdin().lock().lines()
     .map(|x| String::from(x.unwrap().trim())).collect();
   let cmds: Vec<Move> = lines.iter().map(|x| parse(x)).collect();
-  let mut posn = Position{x: 0, y: 0};
+  let mut posn = Position{x: 0, y: 0, aim: 0};
   for c in cmds {
     posn.update(&c);
   }
@@ -33,15 +33,19 @@ fn parse(s: &String) -> Move {
 
 struct Position {
   x: i32,
-  y: i32
+  y: i32,
+  aim: i32,
 }
 
 impl Position {
   fn update(self: &mut Position, m: &Move) {
     match m {
-      Move::Up(i) => self.y -= i,
-      Move::Down(i) => self.y += i,
-      Move::Forward(i) => self.x += i,
+      Move::Up(i) => self.aim -= i,
+      Move::Down(i) => self.aim += i,
+      Move::Forward(i) => {
+        self.x += i;
+        self.y += self.aim * i;
+      }
     }
   }
 
