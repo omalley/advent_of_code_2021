@@ -1,59 +1,57 @@
-use std::cmp;
 use std::io;
 use std::io::BufRead;
-use std::iter;
 
 fn main() {
   // Get the input lines
-  let lines: Vec<String> = io::stdin().lock().lines()
-    .map(|x| String::from(x.unwrap().trim())).collect();
-  let trans = transpose(&lines);
-  let gamma = compute_gamma(&trans);
-  let epsilon = (1 << trans.len()) - gamma - 1;
-  println!("gamma = {}, epsilon = {}, product = {}", gamma, epsilon,
-           gamma * epsilon);
+  let inputs: Vec<u64> = io::stdin().lock().lines()
+    .map(|x| u64::from_str_radix(x.unwrap().trim(), 2)
+      .unwrap()).collect();
+  let mask = 1 << (compute_width(&inputs) - 1);
+  let o2_rating = compute_rating(&inputs, mask, |x| x >= 0);
+  let co2_rating = compute_rating(&inputs, mask, |x| x < 0);
+  println!("o2 = {}, co2 = {}, product = {}", o2_rating,
+           co2_rating, o2_rating * co2_rating);
 }
 
-// Transpose the strings so that the first character of each row beomes
-// the first row.
-fn transpose(input: &Vec<String>) -> Vec<String> {
-  let width =
-    input.iter().map(|x| x.len()).reduce(|l, r| cmp::max(l,r)).unwrap();
-  // start with width empty strings
-  let mut result: Vec<String>
-    = iter::repeat(String::new()).take(width).collect();
-  // for each line, append each character
-  for s in input {
-    let mut i = 0;
-    for ch in s.chars() {
-      result[i].push(ch);
-      i += 1;
-    }
-  }
-  result
+fn compute_width(inputs: &Vec<u64>) -> u32 {
+  let mask: u64 = inputs.iter().fold(0, |x, y| x | y);
+  64 - u64::leading_zeros(mask)
 }
 
-// compare the number of '1' versus '0' in the string
-// returns the difference
-fn compare_digits(s: &str) -> i64 {
+// Compute the difference in the count of ones versus zeros at
+// the given mask position.
+fn compare_bits(inputs: &Vec<u64>, mask: u64) -> i32 {
   let mut result = 0;
-  for c in s.chars() {
-    match c {
-      '0' => result -= 1,
-      '1' => result += 1,
-      _ => eprintln!("Unknown character {}", c),
-    }
-  }
-  result
-}
-
-fn compute_gamma(s: &Vec<String>) -> i64 {
-  let mut result = 0;
-  for diff in s.iter().map(|x| compare_digits(x)) {
-    result *= 2;
-    if diff > 0 {
+  for val in inputs {
+    if val & mask == 0 {
+      result -= 1;
+    } else {
       result += 1;
     }
   }
   result
+}
+
+// req_bit takes the difference in 1's versus 0's and returns the
+// required value for the bit.
+fn compute_rating<F>(inputs: &Vec<u64>, mask: u64, req_bit: F) -> u64
+    where F: Fn(i32) -> bool {
+
+  // if we have no mask or inputs, something went wrong
+  assert!(mask != 0 && inputs.len() > 0);
+
+  // determine whether we need a 0 or 1 for this pass
+  let required_bit = req_bit(compare_bits(&inputs, mask));
+
+  // filter the numbers with the right value at the mask position
+  let sub_list: Vec<u64> =
+    inputs.iter().filter(|x| ((*x & mask) != 0) == required_bit)
+          .map(|x| *x).collect();
+
+  // if we have a single answer use it, otherwise continue
+  if sub_list.len() == 1 {
+    sub_list[0]
+  } else {
+    compute_rating(&sub_list, mask >> 1, req_bit)
+  }
 }
