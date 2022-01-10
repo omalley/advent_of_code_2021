@@ -1,57 +1,112 @@
 use std::io;
 use std::io::BufRead;
+use std::iter;
 
 fn main() {
-  // Get the input lines
-  let inputs: Vec<u64> = io::stdin().lock().lines()
-    .map(|x| u64::from_str_radix(x.unwrap().trim(), 2)
-      .unwrap()).collect();
-  let mask = 1 << (compute_width(&inputs) - 1);
-  let o2_rating = compute_rating(&inputs, mask, |x| x >= 0);
-  let co2_rating = compute_rating(&inputs, mask, |x| x < 0);
-  println!("o2 = {}, co2 = {}, product = {}", o2_rating,
-           co2_rating, o2_rating * co2_rating);
+  let stdin = io::stdin();
+  let mut stream = stdin.lock().lines()
+     .map(|x| String::from(x.unwrap().trim()))
+     .filter(|x| x.len() > 0);
+
+  // read the first line as a sequence of integers
+  let moves: Vec<i32> = stream.next().unwrap().split(",")
+     .map(|x| x.trim().parse::<i32>().unwrap()).collect();
+
+  // read the rest as boards
+  let mut boards = read_board_list(stream.by_ref());
+  
+  println!("score = {}", run_moves(&moves, &mut boards));
 }
 
-fn compute_width(inputs: &Vec<u64>) -> u32 {
-  let mask: u64 = inputs.iter().fold(0, |x, y| x | y);
-  64 - u64::leading_zeros(mask)
+const BOARD_SIZE: usize = 5;
+
+#[derive(Debug, Default)]
+struct BingoBoard {
+  board: Vec<Vec<i32>>,
+  mark: [[bool; BOARD_SIZE]; BOARD_SIZE],
 }
 
-// Compute the difference in the count of ones versus zeros at
-// the given mask position.
-fn compare_bits(inputs: &Vec<u64>, mask: u64) -> i32 {
-  let mut result = 0;
-  for val in inputs {
-    if val & mask == 0 {
-      result -= 1;
-    } else {
-      result += 1;
+impl BingoBoard {
+  fn won(&self) -> bool {
+    // look for winning rows
+    for x in 0..BOARD_SIZE {
+      for y in 0..BOARD_SIZE {
+        if !self.mark[x][y] {
+          break;
+        }
+        if y == BOARD_SIZE - 1 {
+          return true
+        }
+      }
     }
+
+    // look for winning columns
+    for y in 0..BOARD_SIZE {
+      for x in 0..BOARD_SIZE {
+        if !self.mark[x][y] {
+          break;
+        }
+        if x == BOARD_SIZE - 1 {
+          return true
+        }
+      }
+    }
+    false
+  }
+
+  fn mark(&mut self, num: i32) {
+    for x in 0..BOARD_SIZE {
+      for y in 0..BOARD_SIZE {
+        if self.board[x][y] == num {
+          self.mark[x][y] = true;
+        }
+      }
+    }
+  }
+
+  fn score(&self, num: i32) -> i64 {
+    let mut sum : i64 = 0;
+    for x in 0..BOARD_SIZE {
+      for y in 0..BOARD_SIZE {
+        if !self.mark[x][y] {
+          sum += self.board[x][y] as i64;
+        }
+      }
+    }
+    sum * num as i64
+  }
+}
+
+fn read_board_list(stream: &mut dyn iter::Iterator<Item = String>)
+    -> Vec<BingoBoard> {
+  let mut peek = stream.peekable();
+  let mut result = Vec::new();
+  while peek.peek() != None {
+    result.push(read_board(peek.by_ref()));
   }
   result
 }
 
-// req_bit takes the difference in 1's versus 0's and returns the
-// required value for the bit.
-fn compute_rating<F>(inputs: &Vec<u64>, mask: u64, req_bit: F) -> u64
-    where F: Fn(i32) -> bool {
-
-  // if we have no mask or inputs, something went wrong
-  assert!(mask != 0 && inputs.len() > 0);
-
-  // determine whether we need a 0 or 1 for this pass
-  let required_bit = req_bit(compare_bits(&inputs, mask));
-
-  // filter the numbers with the right value at the mask position
-  let sub_list: Vec<u64> =
-    inputs.iter().filter(|x| ((*x & mask) != 0) == required_bit)
-          .map(|x| *x).collect();
-
-  // if we have a single answer use it, otherwise continue
-  if sub_list.len() == 1 {
-    sub_list[0]
-  } else {
-    compute_rating(&sub_list, mask >> 1, req_bit)
+fn read_board(stream: &mut dyn iter::Iterator<Item = String>) -> BingoBoard {
+  let mut result = BingoBoard::default();
+  for _ in 0..BOARD_SIZE {
+    let row: Vec<i32> = stream.next().unwrap().split_whitespace()
+       .map(|x| x.parse::<i32>().unwrap()).collect();
+    assert!(row.len() == BOARD_SIZE);
+    result.board.push(row);
   }
+  assert!(result.board.len() == BOARD_SIZE);
+  result
+}
+
+fn run_moves(moves: &Vec<i32>, boards: &mut Vec<BingoBoard>) -> i64 {
+  for m in moves {
+    for b in &mut *boards {
+      b.mark(*m);
+      if b.won() {
+        return b.score(*m)
+      }
+    }
+  }
+  0
 }
