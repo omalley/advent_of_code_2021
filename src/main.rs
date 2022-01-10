@@ -4,13 +4,12 @@ use std::io::BufRead;
 
 fn main() {
   let stdin = io::stdin();
-  let mut lines: Vec<Line> = stdin.lock().lines()
+  let lines: Vec<Line> = stdin.lock().lines()
      .map(|x| String::from(x.unwrap().trim()))
      .filter(|x| x.len() > 0)
      .map(|x| Line::parse(x.as_str()))
      .collect();
 
-  lines.retain(|x| x.is_vertical() || x.is_horizontal());
   let pic = Picture::new(&lines);
   
   println!("pic = {:?}", pic);
@@ -48,6 +47,16 @@ impl Line {
   
   fn is_horizontal(&self) -> bool {
     self.p1.y == self.p2.y
+  }
+
+  fn is_upward(&self) -> bool {
+    if self.is_vertical() || self.is_horizontal() {
+      false
+    } else if self.p2.x > self.p1.x {
+      self.p2.y < self.p1.y
+    } else {
+      self.p2.y > self.p1.y
+    }
   }
 
   fn left(&self) -> i64 {
@@ -121,7 +130,7 @@ impl Picture {
   fn increment(&mut self, p: &Point) {
     match self.bounds {
       Bounding::Empty => {},
-      Bounding::Box{l, r, t, b} =>
+      Bounding::Box{l, r: _, t, b: _} =>
         self.count[(p.x - l) as usize][(p.y - t) as usize] += 1
     }
   }
@@ -131,9 +140,19 @@ impl Picture {
       for x in l.left()..l.right()+1 {
         self.increment(&Point{x: x, y: l.top()})
       }
-    } else {
+    } else if l.is_vertical() {
       for y in l.top()..l.bottom()+1 {
         self.increment(&Point{x: l.left(), y: y})
+      }
+    } else if l.is_upward() {
+      for d in 0..(l.right() - l.left() + 1) {
+        self.increment(&Point{x: l.left() + d,
+                              y: l.bottom() - d});
+      }
+    } else {
+      for d in 0..(l.right() - l.left() + 1) {
+        self.increment(&Point{x: l.left() + d,
+                              y: l.top() + d});
       }
     }
   }
