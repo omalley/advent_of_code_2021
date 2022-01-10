@@ -7,45 +7,14 @@ fn main() {
      .map(|x| String::from(x.unwrap().trim()))
      .filter(|x| x.len() > 0);
 
-  let mut ocean = Ocean::default();
-  // parse the first line as fish ages
-  for fish in lines.next().unwrap().split(",")
-               .map(|x| x.trim().parse::<i32>().unwrap()) {
-     ocean.add(fish, 1);
-  }
+  // parse the first line as crab locations
+  let mut crabs: Vec<i32> = lines.next().unwrap().split(",")
+      .map(|x| x.trim().parse::<i32>().unwrap()).collect();
 
-  for _ in 0..256 {
-    ocean.age();
-    println!("ocean = {:?}", ocean);
-  }
-  println!("total = {}", ocean.total());  
+  // sort them and find median
+  crabs.sort();
+  let median = crabs[crabs.len() / 2];
+  let cost = crabs.iter().fold(0, |cost, x| cost + (x - median).abs());
+  println!("location = {}, cost = {}", median, cost);  
 }
 
-const BIRTH_TO_BIRTH: i32 = 9;
-const GENERATION: i32 = 7;
-  
-#[derive(Debug,Default)]
-struct Ocean {
-  count: Vec<i64>,
-  age: i32,
-}
-
-impl Ocean {
-  fn add(&mut self, age: i32, cnt: i64) {
-    while self.count.len() <= age as usize {
-      self.count.push(0);
-    }
-    self.count[age as usize] += cnt;
-  }
-
-  fn age(&mut self) {
-    let children = self.count.remove(0);
-    self.add(BIRTH_TO_BIRTH - 1, children);
-    self.add(GENERATION - 1, children);
-    self.age += 1;
-  }
-
-  fn total(&self) -> i64 {
-    self.count.iter().fold(0, |acc, c| acc + c)
-  }
-}
