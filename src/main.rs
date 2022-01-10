@@ -101,12 +101,14 @@ fn read_board(stream: &mut dyn iter::Iterator<Item = String>) -> BingoBoard {
 
 fn run_moves(moves: &Vec<i32>, boards: &mut Vec<BingoBoard>) -> i64 {
   for m in moves {
+    println!("Making move {}", *m);
     for b in &mut *boards {
       b.mark(*m);
-      if b.won() {
-        return b.score(*m)
-      }
     }
+    if boards.len() == 1 && boards[0].won() {
+      return boards[0].score(*m)
+    }
+    boards.retain(|x| !x.won());
   }
   0
 }
