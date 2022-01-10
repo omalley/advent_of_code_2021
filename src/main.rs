@@ -14,7 +14,7 @@ fn main() {
      ocean.add(fish, 1);
   }
 
-  for _ in 0..80 {
+  for _ in 0..256 {
     ocean.age();
     println!("ocean = {:?}", ocean);
   }
@@ -26,12 +26,12 @@ const GENERATION: i32 = 7;
   
 #[derive(Debug,Default)]
 struct Ocean {
-  count: Vec<i32>,
+  count: Vec<i64>,
   age: i32,
 }
 
 impl Ocean {
-  fn add(&mut self, age: i32, cnt: i32) {
+  fn add(&mut self, age: i32, cnt: i64) {
     while self.count.len() <= age as usize {
       self.count.push(0);
     }
@@ -45,7 +45,7 @@ impl Ocean {
     self.age += 1;
   }
 
-  fn total(&self) -> i32 {
+  fn total(&self) -> i64 {
     self.count.iter().fold(0, |acc, c| acc + c)
   }
 }
