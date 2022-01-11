@@ -3,32 +3,44 @@ use std::io::BufRead;
 
 fn main() {
   let stdin = io::stdin();
-  let mut lines = stdin.lock().lines()
+  let lines: Vec<Display> = stdin.lock().lines()
      .map(|x| String::from(x.unwrap().trim()))
-     .filter(|x| x.len() > 0);
+     .filter(|x| x.len() > 0)
+     .map(|x| Display::parse(&x))
+     .collect();
 
-  // parse the first line as crab locations
-  let mut crabs: Vec<i32> = lines.next().unwrap().split(",")
-      .map(|x| x.trim().parse::<i32>().unwrap()).collect();
+  println!("linesn = {:?}", lines);
+  let easy = lines.iter().map(|x| x.easy_numbers())
+    .fold(0, |acc, x| acc + x);
+  println!("easy = {}", easy);
+}
 
-  // sort them and find median
-  crabs.sort();
-  let mut best_cost = i32::MAX;
-  let mut best = -1;
-  for g in crabs[0]..crabs[crabs.len() - 1] {
-    let new_cost = total_cost(&crabs, g);
-    if new_cost < best_cost {
-      best_cost = new_cost;
-      best = g;
-    }
+#[derive(Debug,Default)]
+struct Display {
+  digits: Vec<String>,
+  display: Vec<String>,
+}
+
+impl Display {
+  fn parse(input: &str) -> Self {
+    let mut result = Display::default();
+    let parts: Vec<String> = input.split("|")
+        .map(|x| String::from(x)).collect();
+    result.digits = parts[0].split_whitespace().
+        map(|x| sort_word(x.trim())).collect();
+    result.display = parts[1].split_whitespace().
+        map(|x| sort_word(x.trim())).collect();
+    result
   }
-  println!("location = {}, cost = {}", best, best_cost);  
+
+  fn easy_numbers(&self) -> i32 {
+    let easy = vec![2, 3, 4, 7];
+    self.display.iter().filter(|x| easy.contains(&x.len())).count() as i32
+  }
 }
 
-fn cost(n: i32) -> i32 {
-  (n + 1) * n / 2
-}
-
-fn total_cost(posns: &Vec<i32>, goal: i32) -> i32 {
-  posns.iter().fold(0, |total, x| total + cost((x - goal).abs()))
+fn sort_word(input: &str) -> String {
+  let mut chars: Vec<char> = input.chars().collect();
+  chars.sort();
+  String::from_iter(chars)
 }
