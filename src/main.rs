@@ -8,19 +8,28 @@ fn main() {
       .filter(|x| x.len() > 0)
       .map(|x| parse(&x))
       .collect();
+      
   let score = lines.iter()
       .map(|r| match r {
                  ParseResult::Corrupted{_expect: _, found: ch} => score(*ch),
                  _ => 0 })
       .fold(0, |a, b| a + b);
-  println!("score = {}", score);
+
+  let mut fix: Vec<u64> = lines.iter()
+      .map(|r| match r {
+                 ParseResult::Incomplete{expect: e} => fix_score(e),
+                 _ => 0 })
+      .filter(|x| *x > 0)
+      .collect();
+  fix.sort();
+  println!("score = {}, fix score = {}", score, fix[fix.len() /2]);
 }
 
 #[derive(Debug)]
 enum ParseResult {
   OK,
   Corrupted{_expect: char, found: char},
-  Incomplete,
+  Incomplete{expect: Vec<char>},
   Illegal(char),
   Underflow,
 }
@@ -33,6 +42,18 @@ fn score(close: char) -> u64 {
     '>' => 25137,
     _ => 0,
   }
+}
+
+fn fix_score(close: &Vec<char>) -> u64 {
+  close.iter()
+    .map(|c|
+      match c {
+        ')' => 1,
+        ']' => 2,
+        '}' => 3,
+        '>' => 4,
+        _ => 0})
+     .fold(0, |a, b| 5 * a + b)
 }
 
 fn closer(start: char) -> Option<char> {
@@ -74,6 +95,7 @@ fn parse(input: &str) -> ParseResult {
   if stack.len() == 0 {
     ParseResult::OK
   } else {
-    ParseResult::Incomplete
+    stack.reverse();
+    ParseResult::Incomplete{expect: stack}
   }
 }
