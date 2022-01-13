@@ -3,99 +3,94 @@ use std::io::BufRead;
 
 fn main() {
   let stdin = io::stdin();
-  let lines: Vec<ParseResult> = stdin.lock().lines()
-      .map(|x| String::from(x.unwrap().trim()))
-      .filter(|x| x.len() > 0)
-      .map(|x| parse(&x))
-      .collect();
-      
-  let score = lines.iter()
-      .map(|r| match r {
-                 ParseResult::Corrupted{_expect: _, found: ch} => score(*ch),
-                 _ => 0 })
-      .fold(0, |a, b| a + b);
+  let mut octo = Octopus::parse(&mut stdin.lock().lines()
+                                 .map(|x| String::from(x.unwrap().trim()))
+                                 .filter(|x| x.len() > 0));
 
-  let mut fix: Vec<u64> = lines.iter()
-      .map(|r| match r {
-                 ParseResult::Incomplete{expect: e} => fix_score(e),
-                 _ => 0 })
-      .filter(|x| *x > 0)
-      .collect();
-  fix.sort();
-  println!("score = {}, fix score = {}", score, fix[fix.len() /2]);
-}
-
-#[derive(Debug)]
-enum ParseResult {
-  OK,
-  Corrupted{_expect: char, found: char},
-  Incomplete{expect: Vec<char>},
-  Illegal(char),
-  Underflow,
-}
-
-fn score(close: char) -> u64 {
-  match close {
-    ')' => 3,
-    ']' => 57,
-    '}' => 1197,
-    '>' => 25137,
-    _ => 0,
+  let mut flashes = 0;
+  for _ in 0..100 {
+    flashes += octo.advance();
   }
+  println!("flashes = {}", flashes);
 }
 
-fn fix_score(close: &Vec<char>) -> u64 {
-  close.iter()
-    .map(|c|
-      match c {
-        ')' => 1,
-        ']' => 2,
-        '}' => 3,
-        '>' => 4,
-        _ => 0})
-     .fold(0, |a, b| 5 * a + b)
+#[derive(Debug,Default)]
+struct Octopus {
+  energy: Vec<Vec<u32>>,
+  width: usize,
+  turn: u64,
 }
 
-fn closer(start: char) -> Option<char> {
-  match start {
-    '[' => Some(']'),
-    '(' => Some(')'),
-    '<' => Some('>'),
-    '{' => Some('}'),
-    _ => None,
+#[derive(Clone,Copy,Debug)]
+struct Point {
+  x: usize,
+  y: usize,
+}
+
+const OCTOPUS_RADIX: u32 = 10;
+
+impl Octopus {
+  fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
+    let mut result = Octopus::default();
+    result.energy = input.map(|line| line.chars()
+                                .map(|c| c.to_digit(OCTOPUS_RADIX).unwrap())
+                                .collect())
+                         .collect();
+    result.width =
+      match result.energy.iter().map(|x| x.len())
+              .reduce(|a, b| usize::min(a, b)) {
+        None => 0,
+        Some(x) => x,
+      };
+    result
   }
-}
 
-fn is_close(close: char) -> bool {
-  match close {
-    ']' | ')' | '>' | '}' => true,
-    _ => false,
-  }
-}
-
-fn parse(input: &str) -> ParseResult {
-  let mut stack: Vec<char> = Vec::new();
-  for ch in input.chars() {
-    if is_close(ch) {
-      let top = stack.pop();
-      match top {
-        None => return ParseResult::Underflow,
-        Some(req) => if req != ch {
-          return ParseResult::Corrupted{_expect: req, found: ch}
+  fn neighbors(&self, pnt: &Point) -> Vec<Point> {
+    let mut result: Vec<Point> = Vec::new();
+    for relative_x in -1..=1 {
+      for relative_y in -1..=1 {
+        if relative_x != 0 || relative_y != 0 {
+          let off_x = pnt.x as i64 + relative_x;
+          let off_y = pnt.y as i64 + relative_y;
+          if off_x >= 0 && off_x < self.width as i64 &&
+             off_y >= 0 && off_y < self.energy.len() as i64 {
+            result.push(Point{x: off_x as usize, y: off_y as usize});
+          }
         }
       }
-    } else {
-      let close = closer(ch);
-      match close {
-        None => return ParseResult::Illegal(ch),
-        Some(goal) => stack.push(goal),
+    }
+    result
+  }
+  
+  fn advance(&mut self) -> u64 {
+    let mut to_do: Vec<Point> = Vec::new();
+    for x in 0..self.width {
+      for y in 0..self.energy.len() {
+        to_do.push(Point{x : x, y: y});
       }
     }
-  }
-  if stack.len() == 0 {
-    ParseResult::OK
-  } else {
-    stack.reverse();
-    ParseResult::Incomplete{expect: stack}
+
+    // update all of the squares
+    while to_do.len() > 0 {
+      let p = to_do.pop().unwrap();
+      self.energy[p.y][p.x] += 1;
+      // if it went to 10, bump up the neighbors again
+      if self.energy[p.y][p.x] == OCTOPUS_RADIX {
+        to_do.extend(self.neighbors(&p).iter());
+      }
+    }
+
+    self.turn += 1;
+    
+    let mut lights = 0;
+    for x in 0..self.width {
+      for y in 0..self.energy.len() {
+        if self.energy[y][x] >= OCTOPUS_RADIX {
+          self.energy[y][x] = 0;
+          lights += 1;
+        }
+      }
+    }
+    lights
   }
 }
