@@ -7,11 +7,12 @@ fn main() {
                                  .map(|x| String::from(x.unwrap().trim()))
                                  .filter(|x| x.len() > 0));
 
-  let mut flashes = 0;
-  for _ in 0..100 {
-    flashes += octo.advance();
+  loop {
+    if octo.advance() == octo.width * octo.energy.len() {
+      break;
+    }
   }
-  println!("flashes = {}", flashes);
+  println!("turns = {}", octo.turn);
 }
 
 #[derive(Debug,Default)]
@@ -62,7 +63,7 @@ impl Octopus {
     result
   }
   
-  fn advance(&mut self) -> u64 {
+  fn advance(&mut self) -> usize {
     let mut to_do: Vec<Point> = Vec::new();
     for x in 0..self.width {
       for y in 0..self.energy.len() {
