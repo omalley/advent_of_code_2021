@@ -47,7 +47,8 @@ impl CaveSystem {
       new_cave.is_end = name == CaveSystem::END;
       self.caves.insert(String::from(name), new_cave);
     }
-    if name != CaveSystem::END {
+    // Prevent links back to start or links out of end.
+    if dest != CaveSystem::START && name != CaveSystem::END {
       self.caves.get_mut(name).unwrap().passages.push(String::from(dest));
     }
   }
@@ -57,11 +58,12 @@ impl CaveSystem {
 struct Decision {
   name: String,
   next: usize,
+  used_double: bool,
 }
 
 impl Decision {
-  fn new(name: &str) -> Self {
-    Decision{name: String::from(name), next: 0}
+  fn new(name: &str, used_double: bool) -> Self {
+    Decision{name: String::from(name), next: 0, used_double: used_double}
   }
 }
 
@@ -73,12 +75,13 @@ struct PathState {
 
 impl PathState {
   fn new(caves: Rc<CaveSystem>) -> Self {
-    PathState{path: vec![Decision::new(CaveSystem::START)],
+    PathState{path: vec![Decision::new(CaveSystem::START, false)],
               caves: caves.clone()}
   }
 
-  fn can_advance(&self, next: &str, is_big: bool) -> bool {
-    is_big || !self.path.iter().any(|x| x.name == next)
+  // Is this a second visit to a small cave?
+  fn is_double_visit(&self, next: &str, is_big: bool) -> bool {
+    !is_big && self.path.iter().any(|x| x.name == next)
   }
 }
 
@@ -89,14 +92,18 @@ impl Iterator for PathState {
     while self.path.len() > 0 {
       let last_entry: usize = self.path.len() - 1;
       let mut current = &mut self.path[last_entry];
+      let used_double = current.used_double;
       let current_cave = &self.caves.caves[&current.name];
       if current.next >= current_cave.passages.len() {
         self.path.pop();
       } else {
         let next = &current_cave.passages[current.next];
         current.next += 1;
-        if self.can_advance(next, self.caves.caves[next].is_big) {
-          self.path.push(Decision::new(next));
+        let next_is_double = self.is_double_visit(next,
+          self.caves.caves[next].is_big);
+
+        if !used_double || !next_is_double {
+          self.path.push(Decision::new(next, used_double || next_is_double));
         }
         if next == CaveSystem::END {
           return Some(self.path.iter()
