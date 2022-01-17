@@ -1,117 +1,100 @@
-use std::collections::HashMap;
 use std::io;
 use std::io::BufRead;
-use std::rc::Rc;
+
+use lazy_static::lazy_static;
+use regex::Captures;
+use regex::Regex;
 
 fn main() {
   let stdin = io::stdin();
-  let caves = Rc::new(CaveSystem::parse(&mut stdin.lock().lines()
-                        .map(|x| String::from(x.unwrap().trim()))
-                        .filter(|x| x.len() > 0)));
+  let mut problem = Problem::parse(&mut stdin.lock().lines()
+                                     .map(|x| String::from(x.unwrap().trim()))
+                                     .filter(|x| x.len() > 0));
+  for f in 0..1 {
+    problem.do_fold(f);
+    println!("count = {}", problem.count());
+  }
+}
 
-  println!("paths = {}", PathState::new(caves.clone()).count());
+#[derive(Debug)]
+enum Fold {
+  Horizontal {y : usize},
+  Vertical {x: usize}
+}
+
+#[derive(Clone,Copy,Debug,Eq,Ord,PartialEq,PartialOrd)]
+struct Point {
+  x: usize,
+  y: usize,
 }
 
 #[derive(Default,Debug)]
-struct CaveSystem {
-  caves: HashMap<String,Cave>,
+struct Problem {
+  points: Vec<Point>,
+  folds: Vec<Fold>,
 }
 
-#[derive(Default,Debug)]
-struct Cave {
-  passages: Vec<String>,
-  is_big: bool,
-  is_end: bool,
-}
-
-impl CaveSystem {
-  const START: &'static str = "start";
-  const END: &'static str = "end";
+impl Problem {
+  fn get_number(cap: &Captures, name: &str) -> usize {
+    cap.name(name).unwrap().as_str().parse::<usize>().unwrap()
+  }
   
   fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
-    let mut result = CaveSystem::default();
+    lazy_static! {
+      static ref POINT_RE: Regex
+        = Regex::new(r"^(?P<x>\d+),(?P<y>\d+)$").unwrap();
+      static ref FOLD_RE: Regex
+        = Regex::new(r"^fold\s+along\s+(?P<dir>[xy])=(?P<val>\d+)$").unwrap();
+    }
+    let mut result = Problem::default();
     for line in input {
-      let parts: Vec<String> = line.split("-")
-          .map(|x| String::from(x.trim())).collect();
-      assert!(parts.len() == 2);
-      result.create_cave(&parts[0], &parts[1]);
-      result.create_cave(&parts[1], &parts[0]);
+      match FOLD_RE.captures(&line) {
+        None =>
+          match POINT_RE.captures(&line) {
+            None => panic!("Bad point {}", line),
+            Some(cap) =>
+              result.points.push(Point{
+                x: Problem::get_number(&cap, "x"),
+                y: Problem::get_number(&cap, "y")
+              }),
+          }
+        Some(cap) =>
+          match cap.name("dir").unwrap().as_str() {
+            "x" => result.folds.push(Fold::Vertical{
+              x: Problem::get_number(&cap, "val")}),
+            "y" => result.folds.push(Fold::Horizontal{
+              y: Problem::get_number(&cap, "val")}),
+            _ => panic!("Bad fold {}", line),
+          }
+      }
     }
     result
   }
 
-  fn create_cave(&mut self, name: &str, dest: &str)  {
-    if !self.caves.contains_key(name) {
-      let mut new_cave = Cave::default();
-      new_cave.is_big = name.chars().next().unwrap().is_ascii_uppercase();
-      new_cave.is_end = name == CaveSystem::END;
-      self.caves.insert(String::from(name), new_cave);
+  fn do_fold(&mut self, fold_idx: usize) {
+    match self.folds.get(fold_idx).unwrap() {
+      Fold::Vertical{x: vf} =>
+        self.points =
+          self.points.iter().map(|p|
+            if p.x > *vf {
+              Point{x: 2* vf - p.x, y: p.y}
+            } else {
+              *p
+            }).collect(),
+      Fold::Horizontal{y: hf} =>
+        self.points =
+          self.points.iter().map(|p|
+            if p.y > *hf {
+              Point{x: p.x, y: 2 * hf - p.y}
+            } else {
+              *p
+            }).collect(),
     }
-    // Prevent links back to start or links out of end.
-    if dest != CaveSystem::START && name != CaveSystem::END {
-      self.caves.get_mut(name).unwrap().passages.push(String::from(dest));
-    }
-  }
-}
-
-#[derive(Debug)]
-struct Decision {
-  name: String,
-  next: usize,
-  used_double: bool,
-}
-
-impl Decision {
-  fn new(name: &str, used_double: bool) -> Self {
-    Decision{name: String::from(name), next: 0, used_double: used_double}
-  }
-}
-
-#[derive(Debug)]
-struct PathState {
-  caves: Rc<CaveSystem>,
-  path: Vec<Decision>,
-}
-
-impl PathState {
-  fn new(caves: Rc<CaveSystem>) -> Self {
-    PathState{path: vec![Decision::new(CaveSystem::START, false)],
-              caves: caves.clone()}
+    self.points.sort_unstable();
+    self.points.dedup();
   }
 
-  // Is this a second visit to a small cave?
-  fn is_double_visit(&self, next: &str, is_big: bool) -> bool {
-    !is_big && self.path.iter().any(|x| x.name == next)
-  }
-}
-
-impl Iterator for PathState {
-  type Item = Vec<String>;
-  
-  fn next(&mut self) -> Option<Self::Item> {
-    while self.path.len() > 0 {
-      let last_entry: usize = self.path.len() - 1;
-      let mut current = &mut self.path[last_entry];
-      let used_double = current.used_double;
-      let current_cave = &self.caves.caves[&current.name];
-      if current.next >= current_cave.passages.len() {
-        self.path.pop();
-      } else {
-        let next = &current_cave.passages[current.next];
-        current.next += 1;
-        let next_is_double = self.is_double_visit(next,
-          self.caves.caves[next].is_big);
-
-        if !used_double || !next_is_double {
-          self.path.push(Decision::new(next, used_double || next_is_double));
-        }
-        if next == CaveSystem::END {
-          return Some(self.path.iter()
-                          .map(|x| x.name.clone())
-                          .collect())
-        }
-      }
-    }
-    None
+  fn count(&self) -> usize {
+    self.points.len()
   }
 }
