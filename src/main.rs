@@ -1,92 +1,79 @@
-use std::collections::HashMap;
 use std::io;
 use std::io::BufRead;
 
 fn main() {
   let stdin = io::stdin();
-  let mut problem = Problem::parse(&mut stdin.lock().lines()
-                                     .map(|x| String::from(x.unwrap().trim()))
-                                     .filter(|x| x.len() > 0));
-  for i in 0..40 {
-    println!("iteration {} size = {}", i, problem.size());
-    problem.grow();
-    if i == 9 {
-      println!("score = {}", problem.score());
-    }
-  }
-  println!("score = {}", problem.score());
+  let problem = Problem::parse(&mut stdin.lock().lines()
+                                 .map(|x| String::from(x.unwrap().trim()))
+                                 .filter(|x| x.len() > 0));
+  println!("lowest = {}", problem.find_lowest());
 }
 
 #[derive(Debug, Default)]
 struct Problem {
-  initial: String,
-  insertions: HashMap<String, Vec<String>>,
-  current: HashMap<String, u64>,
+  risk: Vec<Vec<u32>>,
+  width: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Point {
+  x: usize,
+  y: usize,
 }
 
 impl Problem {
-  fn parse_template(template: &str) -> HashMap<String, u64> {
-    let mut result = HashMap::new();
-    if template.len() > 1 {
-      let mut char_itr = template.chars();
-      let mut prev = char_itr.next().unwrap();
-      for ch in char_itr {
-        let mut key = String::from(prev);
-        key.push(ch);
-        result.insert(key.clone(), result.get(&key).unwrap_or(&0) + 1);
-        prev = ch;
-      }
-    }
-    result
-  }
+  const RISK_RADIX: u32 = 10;
   
   fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
     let mut result = Problem::default();
-    result.initial = input.next().unwrap();
-    result.current = Problem::parse_template(&result.initial);
-    for line in input {
-      let parts: Vec<&str> = line.split("->").map(|s| s.trim()).collect();
-      let key = String::from(parts[0]);
-      let mut chars = key.chars();
-      let mut val1 = String::from(chars.next().unwrap());
-      val1.push_str(parts[1]);
-      let mut val2 = String::from(parts[1]);
-      val2.push(chars.next().unwrap());
-      result.insertions.insert(key, vec![val1, val2]);
-    }
+    result.risk = input.map(|line| line.chars()
+                             .map(|c| c.to_digit(Problem::RISK_RADIX).unwrap())
+                             .collect())
+                       .collect();
+    result.width =
+      match result.risk.iter().map(|x| x.len())
+              .reduce(|a, b| usize::min(a, b)) {
+        None => 0,
+        Some(x) => x,
+      };
     result
   }
 
-  fn size(&self) -> u64 {
-    self.current.iter().map(|(_,v)| v).fold(0, |a, b| a + b) + 1
+  fn find_neighbors(&self, point: &Point) -> Vec<Point> {
+    let mut result: Vec<Point> = Vec::new();
+    if point.x > 0 {
+      result.push(Point{x: point.x - 1, y: point.y});
+    }
+    if point.y > 0 {
+      result.push(Point{x: point.x, y: point.y - 1});
+    }
+    if point.y < self.risk.len() - 1 {
+      result.push(Point{x: point.x, y: point.y + 1});
+    }
+    if point.x < self.width - 1 {
+      result.push(Point{x: point.x + 1, y: point.y});
+    }
+    result
   }
   
-  fn grow(&mut self) {
-    let mut new_map : HashMap<String, u64> = HashMap::new();
-    for (key, value) in &self.current {
-      if self.insertions.contains_key(key) {
-        for new_key in self.insertions.get(key).unwrap() {
-          new_map.insert(String::from(new_key),
-             new_map.get(new_key).unwrap_or(&0) + value);
+  fn find_lowest(&self) -> u32 {
+    let mut best: Vec<Vec<u32>> =
+        vec![vec![ u32::MAX; self.width]; self.risk.len()];
+    best[0][0] = 0;
+    let mut to_do: Vec<Point> = Vec::new();
+    to_do.push(Point{x:0, y:0});
+    while to_do.len() > 0 {
+      let current = to_do.pop().unwrap();
+      for neighbor in &self.find_neighbors(&current) {
+        let new_risk =
+            self.risk[neighbor.y][neighbor.x] + best[current.y][current.x];
+        if new_risk < best[neighbor.y][neighbor.x] {
+          best[neighbor.y][neighbor.x] = new_risk;
+          to_do.push(neighbor.clone());
         }
-      } else {
-        new_map.insert(String::from(key),
-             new_map.get(key).unwrap_or(&0) + value);
       }
     }
-    self.current = new_map;
-  }
-
-  fn score(&self) -> u64 {
-    let mut char_cnt: HashMap<char, u64> = HashMap::new();
-    // count the first character
-    char_cnt.insert(self.initial.chars().next().unwrap(), 1);
-    for (key, value) in &self.current {
-      let ch = key.chars().last().unwrap();
-      char_cnt.insert(ch, char_cnt.get(&ch).unwrap_or(&0) + *value);
-    }
-    let mut sum: Vec<u64> = char_cnt.iter().map(|(_,v)| *v).collect();
-    sum.sort();
-    sum.get(sum.len() - 1).unwrap() - sum.get(0).unwrap()
+    println!("best = {:?}", best);
+    best[self.risk.len() -1][self.width - 1]
   }
 }
