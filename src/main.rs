@@ -10,10 +10,11 @@ fn main() {
   let mut problem = Problem::parse(&mut stdin.lock().lines()
                                      .map(|x| String::from(x.unwrap().trim()))
                                      .filter(|x| x.len() > 0));
-  for f in 0..1 {
+  for f in 0..problem.folds.len() {
     problem.do_fold(f);
     println!("count = {}", problem.count());
   }
+  problem.draw();
 }
 
 #[derive(Debug)]
@@ -96,5 +97,23 @@ impl Problem {
 
   fn count(&self) -> usize {
     self.points.len()
+  }
+
+  fn draw(&self) {
+    let max_x = self.points.iter()
+        .map(|p| p.x).fold(0, |a,b| usize::max(a, b));
+    let max_y = self.points.iter()
+        .map(|p| p.y).fold(0, |a,b| usize::max(a, b));
+    let mut result: Vec<Vec<bool>> =
+      vec![vec![false; max_x + 1]; max_y + 1];
+    for p in &self.points {
+      result[p.y][p.x] = true;
+    }
+    for line in result {
+      for posn in line {
+        print!("{}", if posn {'#'} else {' '})
+      }
+      println!("")
+    }
   }
 }
