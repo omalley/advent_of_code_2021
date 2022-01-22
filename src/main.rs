@@ -8,19 +8,25 @@ use std::str::Chars;
 
 fn main() {
   let stdin = io::stdin();
-  let mut sum = SnailNumber::Number(0);
-  let mut is_first = true;
-  for line in stdin.lock().lines()
-                   .map(|x| String::from(x.unwrap().trim()))
-                   .filter(|x| x.len() > 0) {
-    let mut number = SnailNumber::parse(&line);
-    sum = if is_first {
-      is_first = false;
-      number
-    } else {
-      sum.add(&mut number)
-    };
-    println!("s = {}, mag = {}", sum, sum.magnitude());
+  let nums: Vec<SnailNumber> = stdin.lock().lines()
+       .map(|x| String::from(x.unwrap().trim()))
+       .filter(|x| x.len() > 0)
+       .map(|x| SnailNumber::parse(&x))
+       .collect();
+  let mut max = 0;
+  for first in 0..nums.len() {
+    for second in 0..nums.len() {
+      if first != second {
+        let mut num = SnailNumber::deep_copy(&nums[first]);
+        num = num.add(&mut SnailNumber::deep_copy(&nums[second]));
+        let mag = num.magnitude();
+        if mag > max {
+          println!("numbers {} + {} have mag = {}", nums[first],
+            nums[second], mag);
+          max = mag;
+        }
+      }
+    }
   }
 }
 
@@ -65,7 +71,8 @@ impl SnailNumber {
         if input.next() != Some(']') {
           panic!("Missing ]");
         }
-        SnailNumber::Pair(Rc::new(RefCell::new(left)), Rc::new(RefCell::new(right)))
+        SnailNumber::Pair(Rc::new(RefCell::new(left)),
+                          Rc::new(RefCell::new(right)))
       }
       Some('0'..='9') => SnailNumber::parse_number(input),
       Some(_) => panic!("Syntax error"),
@@ -73,6 +80,17 @@ impl SnailNumber {
     }
   }
 
+  fn deep_copy(&self) -> Self {
+    match self {
+      SnailNumber::Number(n) => SnailNumber::Number(*n),
+      SnailNumber::Pair(l, r) => 
+        SnailNumber::Pair(Rc::new(RefCell::new(SnailNumber::deep_copy(
+                            &*l.borrow()))),
+                          Rc::new(RefCell::new(SnailNumber::deep_copy(
+                            &*r.borrow())))),
+    }
+  }
+  
   fn parse_number(input: &mut Peekable<Chars>) -> Self {
     let mut s = String::new();
     while let Some(c) = input.next_if(|ch| ch.is_ascii_digit()) {
@@ -83,7 +101,8 @@ impl SnailNumber {
 
   fn add(&mut self, right: &mut Self) -> Self {
     let mut result =
-      SnailNumber::Pair(Rc::new(RefCell::new(self.clone())), Rc::new(RefCell::new(right.clone())));
+      SnailNumber::Pair(Rc::new(RefCell::new(self.clone())),
+                        Rc::new(RefCell::new(right.clone())));
     while result.explode(0).is_found() || result.split() {
       // pass
     }
@@ -102,7 +121,8 @@ impl SnailNumber {
       SnailNumber::Number(_) => ExplodeResult::None,
       SnailNumber::Pair(l, r) => {
         if level == 4 {
-          let result = ExplodeResult::AddBoth(l.borrow().get_number(), r.borrow().get_number());
+          let result = ExplodeResult::AddBoth(l.borrow().get_number(),
+                                              r.borrow().get_number());
           *self = SnailNumber::Number(0);
           result
         } else {
@@ -168,7 +188,8 @@ impl SnailNumber {
   fn magnitude(&self) -> i64 {
    match self {
      SnailNumber::Number(n) => *n,
-     SnailNumber::Pair(l, r) => 3 * l.borrow().magnitude() + 2 * r.borrow().magnitude(),
+     SnailNumber::Pair(l, r) =>
+       3 * l.borrow().magnitude() + 2 * r.borrow().magnitude(),
    }
   }
 }
