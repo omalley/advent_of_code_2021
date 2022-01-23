@@ -134,8 +134,8 @@ impl Solution {
   // Assumes both sets of points are sorted.
   // Returns the offset to adjust the new_scanner points by
   fn find_match(&self, new_scanner: &Vec<Point>) -> Option<Point> {
-    for old in 0 .. self.beacons.len() - Solution::REQUIRED_MATCHES {
-      for new in 0 .. new_scanner.len() - Solution::REQUIRED_MATCHES {
+    for old in 0 .. self.beacons.len() - Solution::REQUIRED_MATCHES + 1 {
+      for new in 0 .. new_scanner.len() - Solution::REQUIRED_MATCHES + 1 {
         let offset = self.beacons[old].subtract(&new_scanner[new]);
         let mut matches: usize = 0;
         let mut left_posn: usize = old;
@@ -164,7 +164,7 @@ impl Solution {
   }
 }
 
-#[derive(Debug, EnumIter)]
+#[derive(Debug, EnumIter, PartialEq)]
 enum Orientation {
   ZposYpos,
   ZposXpos,
