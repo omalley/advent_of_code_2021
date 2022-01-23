@@ -30,6 +30,13 @@ fn main() {
   }
   println!("sol = {:?}", solution);
   println!("beacons = {}", solution.beacons.len());
+  let mut max: i64 = 0;
+  for p in &solution.offsets {
+    for q in &solution.offsets {
+      max = i64::max(max, p.distance(q));
+    }
+  }
+  println!("max distance = {}", max);
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -53,6 +60,11 @@ impl Point {
 
   fn subtract(&self, other: &Point) -> Point {
     Point{x: self.x - other.x, y: self.y - other.y, z: self.z - other.z}
+  }
+
+  fn distance(&self, other: &Point) -> i64 {
+    i64::abs(self.x - other.x) + i64::abs(self.y - other.y) +
+      i64::abs(self.z - other.z)
   }
 }
 
@@ -90,6 +102,7 @@ impl Scanner {
 struct Solution {
   beacons: Vec<Point>,
   merged_scanners: Vec<i64>,
+  offsets: Vec<Point>,
 }
 
 impl Solution {
@@ -128,6 +141,7 @@ impl Solution {
     self.beacons.sort();
     self.beacons.dedup();
     self.merged_scanners.push(id);
+    self.offsets.push(*offset);
   }
   
   // Tries to find a match with the current known beacons.
