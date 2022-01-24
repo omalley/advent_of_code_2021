@@ -8,8 +8,9 @@ fn main() {
        .map(|x| String::from(x.unwrap().trim()))
        .filter(|x| x.len() > 0));
   println!("original points = {}", scan.count());
-  scan.next();
-  scan.next();
+  for _ in 0..50 {
+    scan.next();
+  }
   println!("enhanced points = {}", scan.count());
 }
 
