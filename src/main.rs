@@ -1,102 +1,90 @@
-use std::fmt;
 use std::io;
 use std::io::BufRead;
 
 fn main() {
   let stdin = io::stdin();
-  let mut scan = Scan::parse(&mut stdin.lock().lines()
+  let mut game = Game::parse(&mut stdin.lock().lines()
        .map(|x| String::from(x.unwrap().trim()))
        .filter(|x| x.len() > 0));
-  println!("original points = {}", scan.count());
-  for _ in 0..50 {
-    scan.next();
+  println!("game = {:?}", game);
+  let mut next = 0;
+  while !game.is_over() {
+    game.players[next].turn(&mut game.die);
+    next = (next + 1) % game.players.len();
   }
-  println!("enhanced points = {}", scan.count());
+  println!("game = {:?}", game);
+  println!("result = {}", game.die.throws * game.players[next].score);
 }
 
-#[derive(Debug, Default)]
-struct Scan {
-  algorithm: Vec<bool>,
-  map: Vec<Vec<bool>>,
-  background: bool,
-  width: usize,
+#[derive(Debug)]
+struct Die {
+  next: u64,
+  throws: u64,
 }
 
-impl Scan {
-  fn convert(input: &str) -> Vec<bool> {
-    input.chars().map(|c| c == '#').collect()
+impl Die {
+  fn new() -> Self {
+    Die{ next: 1, throws: 0 }
   }
+
+  const SIZE: u64 = 100;
   
+  fn next(&mut self) -> u64 {
+    let result = self.next;
+    self.next = (self.next % Die::SIZE) + 1;
+    self.throws += 1;
+    result
+  }
+}
+
+#[derive(Debug)]
+struct Player {
+  id: u64,
+  position: u64,
+  score: u64,
+}
+
+impl Player {
+  const BOARD_SIZE: u64 = 10;
+
+  fn parse(line: &str) -> Self {
+    let parts: Vec<&str> = line.split_ascii_whitespace().collect();
+    let id = parts[1].parse::<u64>().unwrap();
+    let posn = parts[4].parse::<u64>().unwrap();
+    return Player{id: id, position: posn, score: 0}
+  }
+
+  fn advance(&mut self, spaces: u64) {
+    self.position = ((self.position - 1 + spaces) % Player::BOARD_SIZE) + 1;
+    self.score += self.position;
+  }
+
+  fn turn(&mut self, die: &mut Die) {
+    self.advance(die.next() + die.next() + die.next());
+  }
+}
+
+#[derive(Debug)]
+struct Game {
+  players: Vec<Player>,
+  die: Die,
+}
+
+impl Game {
   fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
-    let mut result = Scan::default();
-    result.background = false;
-    result.algorithm = Scan::convert(&input.next().unwrap());
-    
+    let mut players: Vec<Player> = Vec::new();
     for line in input {
-      result.map.push(Scan::convert(&line))
+      players.push(Player::parse(&line));
     }
-    result.width = result.map.iter().map(|v| v.len())
-        .reduce(|a,b| usize::min(a, b)).unwrap();
-    result
+    Game{ players: players, die: Die::new() }
   }
 
-  fn lookup(&self, x: i64, y: i64) -> bool {
-    if x < 0 || y < 0 ||
-       x >= self.width as i64 || y >= self.map.len() as i64 {
-      self.background
-    } else {
-      self.map[y as usize][x as usize]
-    }
-  }
-
-  fn next_point(&self, x: i64, y: i64) -> bool {
-    let mut idx: usize = 0;
-    for y_nbr in -1..=1 {
-      for x_nbr in -1..=1 {
-        idx *= 2;
-        if self.lookup(x + x_nbr, y + y_nbr) {
-          idx += 1;
-        }
-      }
-    }
-    self.algorithm[idx]
-  }
-
-  fn next(&mut self) {
-    let mut new_map: Vec<Vec<bool>> = Vec::new();
-    for y in -1 ..= self.map.len() as i64 {
-      let mut row: Vec<bool> = Vec::new();
-      for x in -1 ..= self.width as i64 {
-        row.push(self.next_point(x, y));
-      }
-      new_map.push(row);
-    }
-    self.background = self.algorithm[if self.background { 511 } else { 0 }];
-    self.map = new_map;
-    self.width += 2;
-  }
-
-  fn count(&self) -> usize {
-    let mut result: usize = 0;
-    for row in &self.map {
-      for p in row {
-        if *p {
-          result += 1;
-        }
-      }
-    }
-    result
+  const MAX_SCORE: u64 = 1000;
+  
+  fn is_over(&self) -> bool {
+    self.players.iter()
+      .map(|p| p.score).reduce(|a, b| u64::max(a, b)).unwrap()
+      >= Game::MAX_SCORE
   }
 }
 
-impl fmt::Display for Scan {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    for row in &self.map {
-      for pos in row {
-        write!(f, "{} ", if *pos { "#" } else { "." }) ?
-      }
-      write!(f, "\n") ?
-    }
-    fmt::Result::Ok(())
-  }
-}
