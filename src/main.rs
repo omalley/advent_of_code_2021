@@ -1,127 +1,132 @@
-use std::cmp::Reverse;
 use std::io;
 use std::io::BufRead;
 
-use priority_queue::PriorityQueue;
+use lazy_static::lazy_static;
+use regex::Captures;
+use regex::Regex;
 
 fn main() {
   let stdin = io::stdin();
-  let game = Game::parse(&mut stdin.lock().lines()
+  let cmds: Vec<Command> = stdin.lock().lines()
        .map(|x| String::from(x.unwrap().trim()))
-       .filter(|x| x.len() > 0));
-  println!("game = {:?}", game);
-  let mut queue: PriorityQueue<Game, Reverse<Priority>> = PriorityQueue::new();
+       .filter(|x| x.len() > 0)
+       .map(|x| Command::parse(&x))
+       .collect();
+  let mut reactor = Reactor::default();
+  reactor.init(&cmds);
+  println!("reactor = {} x {} x {}", reactor.x_cuts.len(),
+      reactor.y_cuts.len(), reactor.z_cuts.len());
+  for c in &cmds {
+    reactor.run(c);
+  }
+  println!("count = {}", reactor.count());
+}
 
-  // push the initial state on to the queue
-  let priority = game.make_priority(1);
-  queue.push(game, priority);
+#[derive(Debug, Default)]
+struct Reactor {
+  x_cuts: Vec<i64>,
+  y_cuts: Vec<i64>,
+  z_cuts: Vec<i64>,
+  is_on: Vec<Vec<Vec<bool>>>,
+}
 
-  loop {
-    // keep going until all games have been won
-    if let Some((_, Reverse(priority))) = queue.peek() {
-      if priority.high_score >= Game::MAX_SCORE {
-        break;
+impl Reactor {
+  fn init(&mut self, cmds: &Vec<Command>) {
+    for c in cmds {
+      self.x_cuts.push(c.x0);
+      self.x_cuts.push(c.x1+1);
+      self.y_cuts.push(c.y0);
+      self.y_cuts.push(c.y1+1);
+      self.z_cuts.push(c.z0);
+      self.z_cuts.push(c.z1+1);
+    }
+    self.x_cuts.sort();
+    self.y_cuts.sort();
+    self.z_cuts.sort();
+    self.x_cuts.dedup();
+    self.y_cuts.dedup();
+    self.z_cuts.dedup();
+    for _x in 0..self.x_cuts.len() {
+      let mut row: Vec<Vec<bool>> = Vec::new();
+      for _y in 0..self.y_cuts.len() {
+        row.push(vec![false; self.z_cuts.len()]);
+      }
+      self.is_on.push(row);
+    }
+  }
+
+  fn run(&mut self, cmd: &Command) {
+    for x in self.x_idx(cmd.x0)..self.x_idx(cmd.x1+1) {
+      for y in self.y_idx(cmd.y0)..self.y_idx(cmd.y1+1) {
+        for z in self.z_idx(cmd.z0)..self.z_idx(cmd.z1+1) {
+          self.is_on[x][y][z] = cmd.on;
+        }
       }
     }
-    let (game, priority) = queue.pop().unwrap();
+  }
 
-    // for each roll, update the board and put it back on the queue
-    for (roll, times) in die_rolls() {
-      let mut new_state = game.clone();
-      new_state.turn(roll);
-      let mut new_priority =
-        new_state.make_priority(times * priority.0.time_lines);
+  fn x_idx(&self, x: i64) -> usize {
+    self.x_cuts.binary_search(&x).unwrap()
+  }
 
-      // if it is already on the queue, just merge them together
-      if let Some(Reverse(prev)) = queue.get_priority(&new_state) {
-        new_priority.0.time_lines += prev.time_lines;
-        queue.change_priority(&new_state, new_priority);
-      } else {
-        queue.push(new_state, new_priority);
+  fn y_idx(&self, y: i64) -> usize {
+    self.y_cuts.binary_search(&y).unwrap()
+  }
+
+  fn z_idx(&self, z: i64) -> usize {
+    self.z_cuts.binary_search(&z).unwrap()
+  }
+
+  fn count(&self) -> usize {
+    let mut result: usize = 0;
+    for x in 0..self.x_cuts.len() - 1 {
+      for y in 0..self.y_cuts.len() - 1 {
+        for z in 0..self.z_cuts.len() - 1 {
+          if self.is_on[x][y][z] {
+            result += (self.x_cuts[x+1] - self.x_cuts[x]) as usize *
+                (self.y_cuts[y+1] - self.y_cuts[y]) as usize*
+                (self.z_cuts[z+1] - self.z_cuts[z]) as usize;
+          }
+        }
       }
     }
-  }
-
-  let mut wins: Vec<u64> = vec![0; 2];
-  for (game, Reverse(priority)) in &queue {
-    wins[game.next] += priority.time_lines;
-  }
-  println!("player 1 = {}, player 2 = {}", wins[1], wins[0]);
-}
-
-// a list of the roll and how often
-fn die_rolls() -> Vec<(u64, u64)> {
-  vec![(3,1), (4, 3), (5, 6), (6, 7), (7, 6), (8, 3), (9, 1)]
-}
-
-// Use the reversed scores as a priority so that we will
-// advance the lower scores first to reuse states as much
-// as possilbe.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct Priority {
-  high_score: u64,
-  low_score: u64,
-  time_lines: u64,
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct Player {
-  position: u64,
-  score: u64,
-}
-
-impl Player {
-  const BOARD_SIZE: u64 = 10;
-
-  fn parse(line: &str) -> Self {
-    let parts: Vec<&str> = line.split_ascii_whitespace().collect();
-    let posn = parts[4].parse::<u64>().unwrap();
-    return Player{position: posn, score: 0}
-  }
-
-  fn advance(&mut self, spaces: u64) {
-    self.position = ((self.position - 1 + spaces) % Player::BOARD_SIZE) + 1;
-    self.score += self.position;
+    result
   }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct Game {
-  players: Vec<Player>,
-  next: usize,
+#[derive(Debug, Default)]
+struct Command {
+  on: bool,
+  x0: i64,
+  x1: i64,
+  y0: i64,
+  y1: i64,
+  z0: i64,
+  z1: i64,
 }
 
-impl Game {
-  fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
-    let mut players: Vec<Player> = Vec::new();
-    for line in input {
-      players.push(Player::parse(&line));
+impl Command {
+  const MIN: i64 = -50;
+  const MAX: i64 = 50;
+  fn parse(input: &str) -> Self {
+    lazy_static! {
+      static ref LINE_RE: Regex = Regex::new("^(?P<cmd>on|off)\\s+\
+          x=(?P<x0>-?\\d+)..(?P<x1>-?\\d+),\
+          y=(?P<y0>-?\\d+)..(?P<y1>-?\\d+),\
+          z=(?P<z0>-?\\d+)..(?P<z1>-?\\d+)$").unwrap();
     }
-    Game{ players: players, next: 0 }
+    let capture = LINE_RE.captures(input).unwrap();
+    Command{on: capture.name("cmd").unwrap().as_str() == "on",
+            x0: i64::max(Command::MIN, number(&capture, "x0")),
+            x1: i64::min(Command::MAX, number(&capture, "x1")),
+            y0: i64::max(Command::MIN, number(&capture, "y0")),
+            y1: i64::min(Command::MAX, number(&capture, "y1")),
+            z0: i64::max(Command::MIN, number(&capture, "z0")),
+            z1: i64::min(Command::MAX, number(&capture, "z1"))}
   }
+}
 
-  fn turn(&mut self, spaces: u64) -> bool {
-    self.players[self.next].advance(spaces);
-    self.next = (self.next + 1) % self.players.len();
-    self.is_over()
-  }
-  
-  const MAX_SCORE: u64 = 21;
-  
-  fn is_over(&self) -> bool {
-    self.players.iter()
-      .map(|p| p.score).reduce(|a, b| u64::max(a, b)).unwrap()
-      >= Game::MAX_SCORE
-  }
-
-  fn make_priority(&self, times: u64) -> Reverse<Priority> {
-    let mut max: u64 = 0;
-    let mut min: u64 = u64::MAX;
-    for p in &self.players {
-      max = u64::max(max, p.score);
-      min = u64::min(min, p.score);
-    }
-    Reverse(Priority{high_score: max, low_score: min, time_lines: times})
-  }
+fn number(capture: &Captures, name: &str) -> i64 {
+  capture.name(name).unwrap().as_str().parse::<i64>().unwrap()
 }
 
