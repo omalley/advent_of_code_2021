@@ -106,8 +106,8 @@ struct Command {
 }
 
 impl Command {
-  const MIN: i64 = -50;
-  const MAX: i64 = 50;
+  const MIN: i64 = i64::MIN;
+  const MAX: i64 = i64::MAX;
   fn parse(input: &str) -> Self {
     lazy_static! {
       static ref LINE_RE: Regex = Regex::new("^(?P<cmd>on|off)\\s+\
