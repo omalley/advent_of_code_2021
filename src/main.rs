@@ -128,7 +128,7 @@ struct Caves {
 
 impl Caves {
   const NUM_ROOMS: usize = 4;
-  const ROOM_SIZE: usize = 2;
+  const ROOM_SIZE: usize = 4;
   
   fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
     let lines: Vec<String> = input.collect();
