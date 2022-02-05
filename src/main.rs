@@ -167,6 +167,26 @@ fn split_blocks(ops: &mut Vec<Operation>) -> Vec<CodeBlock> {
   result
 }
 
+fn find_model(blocks: &[CodeBlock], state: &State) -> Option<Vec<i64>> {
+  for next_input in (1..=9).rev() {
+    let mut next_state = state.clone();
+    if blocks[0].evaluate(&mut next_state, next_input) {
+      if blocks.len() > 1 {
+        if let Some(answer) = find_model(&blocks[1..], &next_state) {
+          let mut result: Vec<i64> = Vec::new();
+          result.push(next_input);
+          for a in answer {
+            result.push(a)
+          }
+        }
+      } else if next_state.z == 0 {
+        return Some(vec![next_input])
+      }
+    }
+  }
+  None
+}
+
 fn main() {
   let stdin = io::stdin();
   let mut operators: Vec<Operation> = stdin.lock().lines()
@@ -181,9 +201,6 @@ fn main() {
     println!("{:?}", b);
   }
 
-  let mut state = State::default();
-  for b in &blocks {
-    b.evaluate(&mut state, 23);
-  }
-  println!("output = {:?}", state);
+  let state = State::default();
+  println!("output = {:?}", find_model(&blocks, &state));
 }
