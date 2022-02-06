@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fmt;
 use std::io;
 use std::io::BufRead;
 use std::rc::Rc;
@@ -205,6 +206,16 @@ impl SymbolicValue {
   }
 }
 
+impl fmt::Display for SymbolicValue {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::Input(i) => write!(f, "in_{}", i),
+      Self::Literal(i) => write!(f, "{}", i),
+      Self::Operation(op) => op.borrow().fmt(f),
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 enum SymbolicOperation {
   Add(SymbolicValue, SymbolicValue),
@@ -313,6 +324,18 @@ impl SymbolicOperation {
   }
 }
 
+impl fmt::Display for SymbolicOperation {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    match self {
+      Self::Add(l, r) => write!(f, "({} + {})", l, r),
+      Self::Multiply(l, r) => write!(f, "({} * {})", l, r),
+      Self::Divide(l, r) => write!(f, "({} / {})", l, r),
+      Self::Modulo(l, r) => write!(f, "({} % {})", l, r),
+      Self::Equal(l, r) => write!(f, "({} == {})", l, r),
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 struct SymbolicState {
   w: SymbolicValue,
@@ -414,5 +437,5 @@ fn main() {
       .collect();
 
   let symbolic = SymbolicState::interpret(&operators);
-  println!("output = {:?}", symbolic.z);
+  println!("output = {}", symbolic.z);
 }
