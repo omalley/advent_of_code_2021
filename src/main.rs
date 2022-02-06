@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::io;
 use std::io::BufRead;
+use std::rc::Rc;
 
 #[derive (Debug)]
 enum Register {
@@ -187,20 +189,230 @@ fn find_model(blocks: &[CodeBlock], state: &State) -> Option<Vec<i64>> {
   None
 }
 
+#[derive(Clone, Debug)]
+enum SymbolicValue {
+  Input(i64),
+  Literal(i64),
+  Operation(Rc<RefCell<SymbolicOperation>>),
+}
+
+impl SymbolicValue {
+  fn get_literal(&self) -> Option<i64> {
+    match self {
+      Self::Literal(v) => Some(*v),
+      _ => None,
+    }
+  }
+}
+
+#[derive(Clone, Debug)]
+enum SymbolicOperation {
+  Add(SymbolicValue, SymbolicValue),
+  Multiply(SymbolicValue, SymbolicValue),
+  Divide(SymbolicValue, SymbolicValue),
+  Modulo(SymbolicValue, SymbolicValue),
+  Equal(SymbolicValue, SymbolicValue),
+}
+
+impl SymbolicOperation {
+  fn literal_folding(&self) -> Option<i64> {
+    match self {
+      Self::Add(left, right) =>
+        Some(left.get_literal()? + right.get_literal()?),
+      Self::Multiply(left, right) => {
+        let left_value = left.get_literal();
+        if let Some(l) = left_value {
+          if l == 0 {
+            return Some(0)
+          }
+        }
+        let right_value = right.get_literal();
+        if let Some(r) = right_value {
+          if r == 0 {
+            return Some(0)
+          }
+        }
+        Some(left_value? * right_value?)
+      }
+      Self::Divide(left, right) => {
+        let left_value = left.get_literal();
+        if let Some(l) = left_value {
+          if l == 0 {
+            return Some(0)
+          }
+        }
+        let right_value = right.get_literal()?;
+        if right_value == 0 {
+          None
+        } else {
+          Some(left_value? / right_value)
+        }
+      }
+      Self::Modulo(left, right) => {
+        let left_value = left.get_literal();
+        if let Some(l) = left_value {
+          if l == 0 {
+            return Some(0)
+          } else if l < 0 {
+            return None
+          }
+        }
+        let right_value = right.get_literal()?;
+        if right_value <= 0 {
+          None
+        } else {
+          Some(left_value? % right_value)
+        }
+      },
+      Self::Equal(left, right) =>
+        Some(if left.get_literal()? == right.get_literal()? { 1 } else { 0 }),
+    }
+  }
+
+  fn reduction(&self) -> Option<SymbolicValue> {
+    match self {
+      Self::Add(left, right) => {
+        let left_value = left.get_literal();
+        if let Some(l) = left_value {
+          if l == 0 {
+            return Some(right.clone())
+          }
+        }
+        let right_value = right.get_literal();
+        if let Some(r) = right_value {
+          if r == 0 {
+            return Some(left.clone())
+          }
+        }
+        None
+      }
+      Self::Multiply(left, right) => {
+        let left_value = left.get_literal();
+        if let Some(l) = left_value {
+          if l == 1 {
+            return Some(right.clone())
+          }
+        }
+        let right_value = right.get_literal();
+        if let Some(r) = right_value {
+          if r == 1 {
+            return Some(left.clone())
+          }
+        }
+        None
+      }
+      Self::Divide(left, right) => {
+        let right_value = right.get_literal()?;
+        if right_value == 1 {
+          return Some(left.clone());
+        }
+        None
+      }
+      _ => None,
+    }
+  }
+}
+
+#[derive(Clone, Debug)]
+struct SymbolicState {
+  w: SymbolicValue,
+  x: SymbolicValue,
+  y: SymbolicValue,
+  z: SymbolicValue,
+}
+
+impl SymbolicState {
+  fn new() -> Self {
+    SymbolicState{
+      w: SymbolicValue::Literal(0),
+      x: SymbolicValue::Literal(0),
+      y: SymbolicValue::Literal(0),
+      z: SymbolicValue::Literal(0),
+    }
+  }
+
+  fn set(&mut self, reg: &Register, value: SymbolicValue) {
+    match reg {
+      Register::W => self.w = value,
+      Register::X => self.x = value,
+      Register::Y => self.y = value,
+      Register::Z => self.z = value,
+    }
+  }
+
+  fn get(&self, reg: &Register) -> SymbolicValue {
+    match reg {
+      Register::W => self.w.clone(),
+      Register::X => self.x.clone(),
+      Register::Y => self.y.clone(),
+      Register::Z => self.z.clone(),
+    }
+  }
+
+  fn get_value(&self, operand: &Operand) -> SymbolicValue {
+    match operand {
+      Operand::Value(val) => SymbolicValue::Literal(*val),
+      Operand::Register(reg) => self.get(reg),
+    }
+  }
+
+  fn make_value(op: SymbolicOperation) -> SymbolicValue {
+    if let Some(answer) = op.literal_folding() {
+      SymbolicValue::Literal(answer)
+    } else if let Some(simplified) = op.reduction() {
+      simplified
+    } else {
+      SymbolicValue::Operation(Rc::new(RefCell::new(op)))
+    }
+  }
+
+  fn do_operation(&mut self, op: &Operation, input_idx: &mut i64) {
+    match op {
+      Operation::Input(reg) => {
+        self.set(reg, SymbolicValue::Input(*input_idx));
+        *input_idx += 1;
+      }
+      Operation::Add(reg, operand) => {
+        self.set(reg, Self::make_value(SymbolicOperation::Add(
+          self.get(reg), self.get_value(operand))))
+      }
+      Operation::Multiply(reg, operand) => {
+        self.set(reg, Self::make_value(SymbolicOperation::Multiply(
+          self.get(reg), self.get_value(operand))))
+      }
+      Operation::Divide(reg, operand) => {
+        self.set(reg, Self::make_value(SymbolicOperation::Divide(
+          self.get(reg), self.get_value(operand))))
+      }
+      Operation::Modulo(reg, operand) => {
+        self.set(reg, Self::make_value(SymbolicOperation::Modulo(
+          self.get(reg), self.get_value(operand))))
+      }
+      Operation::Equal(reg, operand) => {
+        self.set(reg, Self::make_value(SymbolicOperation::Equal(
+          self.get(reg), self.get_value(operand))))
+      }
+    }
+  }
+
+  fn interpret(program: &Vec<Operation>) -> Self {
+    let mut state = Self::new();
+    let mut input_idx = 0;
+    for op in program {
+      state.do_operation(op, &mut input_idx);
+    }
+    state
+  }
+}
+
 fn main() {
   let stdin = io::stdin();
-  let mut operators: Vec<Operation> = stdin.lock().lines()
+  let operators: Vec<Operation> = stdin.lock().lines()
       .map(|x| String::from(x.unwrap()))
       .filter(|x| x.len() > 0)
       .map(|x| Operation::parse(&x).unwrap())
       .collect();
 
-  let blocks = split_blocks(&mut operators);
-  println!("{} blocks", blocks.len());
-  for b in &blocks {
-    println!("{:?}", b);
-  }
-
-  let state = State::default();
-  println!("output = {:?}", find_model(&blocks, &state));
+  let symbolic = SymbolicState::interpret(&operators);
+  println!("output = {:?}", symbolic.z);
 }
