@@ -204,40 +204,80 @@ impl SymbolicValue {
       _ => None,
     }
   }
-}
 
-impl fmt::Display for SymbolicValue {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+  fn get_bound(&self) -> (i64, i64) {
     match self {
-      Self::Input(i) => write!(f, "in_{}", i),
-      Self::Literal(i) => write!(f, "{}", i),
-      Self::Operation(op) => op.borrow().fmt(f),
+      Self::Input(_) => (1, 9),
+      Self::Literal(v) => (*v, *v),
+      Self::Operation(x) =>  {
+        (x.borrow().lower, x.borrow().upper)
+      }
+    }
+  }
+
+  fn get_operation(&self) -> Option<Rc<RefCell<SymbolicOperation>>> {
+    match self {
+      Self::Operation(op) => Some(op.clone()),
+      _ => None,
+    }
+  }
+
+  fn name(&self) -> String {
+    match self {
+      Self::Input(i) => format!("in_{}", i),
+      Self::Literal(v) => format!("{}", v),
+      Self::Operation(o) => format!("tmp_{}", o.borrow().name),
+    }
+  }
+
+  fn print_operations(&self) {
+    let mut done: Vec<usize> = Vec::new();
+    match self {
+      Self::Operation(o) => o.borrow().print_operations(&mut done),
+      _ => {},
     }
   }
 }
 
+impl fmt::Display for SymbolicValue {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{}", self.name())
+  }
+}
+
 #[derive(Clone, Debug)]
-enum SymbolicOperation {
-  Add(SymbolicValue, SymbolicValue),
-  Multiply(SymbolicValue, SymbolicValue),
-  Divide(SymbolicValue, SymbolicValue),
-  Modulo(SymbolicValue, SymbolicValue),
-  Equal(SymbolicValue, SymbolicValue),
+struct SymbolicOperation {
+  name: usize,
+  left: SymbolicValue,
+  right: SymbolicValue,
+  kind: SymbolicOperationKind,
+  lower: i64,
+  upper: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SymbolicOperationKind {
+  Add,
+  Multiply,
+  Divide,
+  Modulo,
+  Equal,
 }
 
 impl SymbolicOperation {
+  // If the result is a constant, compute it.
   fn literal_folding(&self) -> Option<i64> {
-    match self {
-      Self::Add(left, right) =>
-        Some(left.get_literal()? + right.get_literal()?),
-      Self::Multiply(left, right) => {
-        let left_value = left.get_literal();
+    match self.kind {
+      SymbolicOperationKind::Add =>
+        Some(self.left.get_literal()? + self.right.get_literal()?),
+      SymbolicOperationKind::Multiply => {
+        let left_value = self.left.get_literal();
         if let Some(l) = left_value {
           if l == 0 {
             return Some(0)
           }
         }
-        let right_value = right.get_literal();
+        let right_value = self.right.get_literal();
         if let Some(r) = right_value {
           if r == 0 {
             return Some(0)
@@ -245,22 +285,22 @@ impl SymbolicOperation {
         }
         Some(left_value? * right_value?)
       }
-      Self::Divide(left, right) => {
-        let left_value = left.get_literal();
+      SymbolicOperationKind::Divide => {
+        let left_value = self.left.get_literal();
         if let Some(l) = left_value {
           if l == 0 {
             return Some(0)
           }
         }
-        let right_value = right.get_literal()?;
+        let right_value = self.right.get_literal()?;
         if right_value == 0 {
           None
         } else {
           Some(left_value? / right_value)
         }
       }
-      Self::Modulo(left, right) => {
-        let left_value = left.get_literal();
+      SymbolicOperationKind::Modulo => {
+        let left_value = self.left.get_literal();
         if let Some(l) = left_value {
           if l == 0 {
             return Some(0)
@@ -268,70 +308,86 @@ impl SymbolicOperation {
             return None
           }
         }
-        let right_value = right.get_literal()?;
+        let right_value = self.right.get_literal()?;
         if right_value <= 0 {
           None
         } else {
           Some(left_value? % right_value)
         }
       },
-      Self::Equal(left, right) =>
-        Some(if left.get_literal()? == right.get_literal()? { 1 } else { 0 }),
+      SymbolicOperationKind::Equal =>
+        Some(if self.left.get_literal()? == self.right.get_literal()? { 1 } else { 0 }),
     }
   }
 
+  // Handle the cases where we don't need the operation, because it is an identity.
+  // (eg. x + 0 or x * 1)
   fn reduction(&self) -> Option<SymbolicValue> {
-    match self {
-      Self::Add(left, right) => {
-        let left_value = left.get_literal();
+    match self.kind {
+      SymbolicOperationKind::Add => {
+        let left_value = self.left.get_literal();
         if let Some(l) = left_value {
           if l == 0 {
-            return Some(right.clone())
+            return Some(self.right.clone())
           }
         }
-        let right_value = right.get_literal();
+        let right_value = self.right.get_literal();
         if let Some(r) = right_value {
           if r == 0 {
-            return Some(left.clone())
+            return Some(self.left.clone())
           }
         }
         None
       }
-      Self::Multiply(left, right) => {
-        let left_value = left.get_literal();
+      SymbolicOperationKind::Multiply => {
+        let left_value = self.left.get_literal();
         if let Some(l) = left_value {
           if l == 1 {
-            return Some(right.clone())
+            return Some(self.right.clone())
           }
         }
-        let right_value = right.get_literal();
+        let right_value = self.right.get_literal();
         if let Some(r) = right_value {
           if r == 1 {
-            return Some(left.clone())
+            return Some(self.left.clone())
           }
         }
         None
       }
-      Self::Divide(left, right) => {
-        let right_value = right.get_literal()?;
+      SymbolicOperationKind::Divide => {
+        let right_value = self.right.get_literal()?;
         if right_value == 1 {
-          return Some(left.clone());
+          return Some(self.left.clone());
         }
         None
       }
       _ => None,
     }
   }
+
+  fn print_operations(&self, done: &mut Vec<usize>) {
+    if !done.contains(&self.name) {
+      done.push(self.name);
+      if let Some(child) = self.left.get_operation() {
+        child.borrow().print_operations(done)
+      }
+      if let Some(child) = self.right.get_operation() {
+        child.borrow().print_operations(done)
+      }
+      println!("tmp_{} <- {} {} {} [{} - {}]", self.name, self.left, self.kind, self.right,
+               self.lower, self.upper)
+    }
+  }
 }
 
-impl fmt::Display for SymbolicOperation {
+impl fmt::Display for SymbolicOperationKind {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match self {
-      Self::Add(l, r) => write!(f, "({} + {})", l, r),
-      Self::Multiply(l, r) => write!(f, "({} * {})", l, r),
-      Self::Divide(l, r) => write!(f, "({} / {})", l, r),
-      Self::Modulo(l, r) => write!(f, "({} % {})", l, r),
-      Self::Equal(l, r) => write!(f, "({} == {})", l, r),
+      SymbolicOperationKind::Add => write!(f, "+"),
+      SymbolicOperationKind::Multiply => write!(f, "*"),
+      SymbolicOperationKind::Divide => write!(f, "/"),
+      SymbolicOperationKind::Modulo => write!(f, "%"),
+      SymbolicOperationKind::Equal => write!(f, "=="),
     }
   }
 }
@@ -379,7 +435,38 @@ impl SymbolicState {
     }
   }
 
-  fn make_value(op: SymbolicOperation) -> SymbolicValue {
+  fn compute_bounds(kind:SymbolicOperationKind,
+                    left: (i64, i64), right: (i64, i64)) -> (i64, i64) {
+    match kind {
+      SymbolicOperationKind::Add => (left.0 + right.0, left.1 + right.1),
+      SymbolicOperationKind::Multiply => (
+        i64::min(i64::min(left.0 * right.1, left.1 * right.0),
+                 i64::min(left.0 * right.0, left.1 * right.1)),
+        i64::max(i64::max(left.0 * right.1, left.1 * right.0),
+                 i64::max(left.0 * right.0, left.1 * right.1))
+      ),
+      SymbolicOperationKind::Divide => {
+        let right_lower = if right.0 == 0 { 1 } else { right.0 };
+        let right_upper = if right.1 == 0 { -1 } else { right.1 };
+        (i64::min(i64::min(left.0 / right_lower, left.1 / right_lower),
+                  i64::min(left.0 / right_upper, left.1 / right_upper)),
+         i64::max(i64::max(left.0 / right_lower, left.1 / right_lower),
+                  i64::max(left.0 / right_upper, left.1 / right_upper)))
+      }
+      SymbolicOperationKind::Modulo => (0, right.1 - 1),
+      SymbolicOperationKind::Equal => (0, 1),
+    }
+  }
+
+  fn make_value(name: usize,
+                kind: SymbolicOperationKind,
+                left: SymbolicValue,
+                right: SymbolicValue,
+                ) -> SymbolicValue {
+    let bounds = Self::compute_bounds(kind, left.get_bound(), right.get_bound());
+    let mut op = SymbolicOperation {
+      name, kind, left, right, lower: bounds.0, upper: bounds.1,
+    };
     if let Some(answer) = op.literal_folding() {
       SymbolicValue::Literal(answer)
     } else if let Some(simplified) = op.reduction() {
@@ -389,40 +476,47 @@ impl SymbolicState {
     }
   }
 
-  fn do_operation(&mut self, op: &Operation, input_idx: &mut i64) {
+  fn interpret_operation(&mut self, op: &Operation, operation_idx: &mut usize, input_idx: &mut i64) {
     match op {
       Operation::Input(reg) => {
         self.set(reg, SymbolicValue::Input(*input_idx));
         *input_idx += 1;
       }
-      Operation::Add(reg, operand) => {
-        self.set(reg, Self::make_value(SymbolicOperation::Add(
-          self.get(reg), self.get_value(operand))))
-      }
-      Operation::Multiply(reg, operand) => {
-        self.set(reg, Self::make_value(SymbolicOperation::Multiply(
-          self.get(reg), self.get_value(operand))))
-      }
-      Operation::Divide(reg, operand) => {
-        self.set(reg, Self::make_value(SymbolicOperation::Divide(
-          self.get(reg), self.get_value(operand))))
-      }
-      Operation::Modulo(reg, operand) => {
-        self.set(reg, Self::make_value(SymbolicOperation::Modulo(
-          self.get(reg), self.get_value(operand))))
-      }
-      Operation::Equal(reg, operand) => {
-        self.set(reg, Self::make_value(SymbolicOperation::Equal(
-          self.get(reg), self.get_value(operand))))
-      }
+      Operation::Add(reg, operand) =>
+        self.set(reg, Self::make_value(*operation_idx,
+                                       SymbolicOperationKind::Add,
+                                       self.get(reg),
+                                        self.get_value(operand))),
+      Operation::Multiply(reg, operand) =>
+        self.set(reg, Self::make_value(*operation_idx,
+                                       SymbolicOperationKind::Multiply,
+                                       self.get(reg),
+                                       self.get_value(operand))),
+      Operation::Divide(reg, operand) =>
+        self.set(reg, Self::make_value(*operation_idx,
+                                       SymbolicOperationKind::Divide,
+                                       self.get(reg),
+                                       self.get_value(operand))),
+      Operation::Modulo(reg, operand) =>
+        self.set(reg, Self::make_value(*operation_idx,
+                                       SymbolicOperationKind::Modulo,
+                                       self.get(reg),
+                                       self.get_value(operand))),
+      Operation::Equal(reg, operand) =>
+        self.set(reg, Self::make_value(*operation_idx,
+                                       SymbolicOperationKind::Equal,
+                                       self.get(reg),
+                                       self.get_value(operand))),
     }
+    *operation_idx += 1;
   }
 
   fn interpret(program: &Vec<Operation>) -> Self {
     let mut state = Self::new();
+    let mut operation_idx: usize = 0;
     let mut input_idx = 0;
     for op in program {
-      state.do_operation(op, &mut input_idx);
+      state.interpret_operation(op, &mut operation_idx, &mut input_idx);
     }
     state
   }
@@ -437,5 +531,6 @@ fn main() {
       .collect();
 
   let symbolic = SymbolicState::interpret(&operators);
-  println!("output = {}", symbolic.z);
+  symbolic.z.print_operations();
+  println!("z = {}", symbolic.z);
 }
