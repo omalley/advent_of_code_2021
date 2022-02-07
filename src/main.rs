@@ -209,9 +209,7 @@ impl SymbolicValue {
     match self {
       Self::Input(_) => (1, 9),
       Self::Literal(v) => (*v, *v),
-      Self::Operation(x) =>  {
-        (x.borrow().lower, x.borrow().upper)
-      }
+      Self::Operation(x) => x.borrow().bounds
     }
   }
 
@@ -226,7 +224,7 @@ impl SymbolicValue {
     match self {
       Self::Input(i) => format!("in_{}", i),
       Self::Literal(v) => format!("{}", v),
-      Self::Operation(o) => format!("tmp_{}", o.borrow().name),
+      Self::Operation(o) => format!("tmp_{:03}", o.borrow().name),
     }
   }
 
@@ -251,8 +249,7 @@ struct SymbolicOperation {
   left: SymbolicValue,
   right: SymbolicValue,
   kind: SymbolicOperationKind,
-  lower: i64,
-  upper: i64,
+  bounds: (i64, i64),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -315,8 +312,21 @@ impl SymbolicOperation {
           Some(left_value? % right_value)
         }
       },
-      SymbolicOperationKind::Equal =>
-        Some(if self.left.get_literal()? == self.right.get_literal()? { 1 } else { 0 }),
+      SymbolicOperationKind::Equal => {
+        let left_bounds = self.left.get_bound();
+        let right_bounds = self.right.get_bound();
+        if left_bounds.1 < right_bounds.0 || right_bounds.1 < left_bounds.0 {
+          // no overlap in the ranges
+          Some(0)
+        } else if left_bounds.0 == left_bounds.1 && left_bounds.0 == right_bounds.0 &&
+            left_bounds.0 == right_bounds.1 {
+          // one potential value on each side
+          Some(1)
+        } else {
+          // we can't tell
+          None
+        }
+      }
     }
   }
 
@@ -374,8 +384,8 @@ impl SymbolicOperation {
       if let Some(child) = self.right.get_operation() {
         child.borrow().print_operations(done)
       }
-      println!("tmp_{} <- {} {} {} [{} - {}]", self.name, self.left, self.kind, self.right,
-               self.lower, self.upper)
+      println!("tmp_{:03} <- {} {} {} [{}..{}]", self.name, self.left, self.kind, self.right,
+               self.bounds.0, self.bounds.1)
     }
   }
 }
@@ -464,9 +474,7 @@ impl SymbolicState {
                 right: SymbolicValue,
                 ) -> SymbolicValue {
     let bounds = Self::compute_bounds(kind, left.get_bound(), right.get_bound());
-    let mut op = SymbolicOperation {
-      name, kind, left, right, lower: bounds.0, upper: bounds.1,
-    };
+    let op = SymbolicOperation {name, kind, left, right, bounds};
     if let Some(answer) = op.literal_folding() {
       SymbolicValue::Literal(answer)
     } else if let Some(simplified) = op.reduction() {
