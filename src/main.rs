@@ -209,14 +209,7 @@ impl SymbolicValue {
     match self {
       Self::Input(_) => (1, 9),
       Self::Literal(v) => (*v, *v),
-      Self::Operation(x) => x.borrow().bounds
-    }
-  }
-
-  fn get_operation(&self) -> Option<Rc<RefCell<SymbolicOperation>>> {
-    match self {
-      Self::Operation(op) => Some(op.clone()),
-      _ => None,
+      Self::Operation(x) => x.borrow().bounds,
     }
   }
 
@@ -225,6 +218,13 @@ impl SymbolicValue {
       Self::Input(i) => format!("in_{}", i),
       Self::Literal(v) => format!("{}", v),
       Self::Operation(o) => format!("tmp_{:03}", o.borrow().name),
+    }
+  }
+
+  fn set_require(&self, bounds: Option<(i64, i64)>) {
+    match self {
+      Self::Operation(op) => op.borrow_mut().set_require(bounds),
+      _ => {},
     }
   }
 
@@ -250,6 +250,7 @@ struct SymbolicOperation {
   right: SymbolicValue,
   kind: SymbolicOperationKind,
   bounds: (i64, i64),
+  require: Option<(i64, i64)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -378,14 +379,62 @@ impl SymbolicOperation {
   fn print_operations(&self, done: &mut Vec<usize>) {
     if !done.contains(&self.name) {
       done.push(self.name);
-      if let Some(child) = self.left.get_operation() {
-        child.borrow().print_operations(done)
+      match &self.left {
+        SymbolicValue::Operation(op) =>
+          op.borrow().print_operations(done),
+        _ => {}
       }
-      if let Some(child) = self.right.get_operation() {
-        child.borrow().print_operations(done)
+      match &self.right {
+        SymbolicValue::Operation(op) =>
+          op.borrow().print_operations(done),
+        _ => {}
       }
-      println!("tmp_{:03} <- {} {} {} [{}..{}]", self.name, self.left, self.kind, self.right,
-               self.bounds.0, self.bounds.1)
+      let left_bounds = self.left.get_bound();
+      let right_bounds = self.right.get_bound();
+      print!("tmp_{:03} <- {} {} {} [{}..{} {} {}..{} = {}..{}]", self.name, self.left, self.kind, self.right,
+               left_bounds.0, left_bounds.1, self.kind, right_bounds.0, right_bounds.1, self.bounds.0, self.bounds.1);
+      if let Some(req) = self.require {
+        print!(" req: {}..{}", req.0, req.1);
+      }
+      println!();
+    }
+  }
+
+  fn set_require(&mut self, require: Option<(i64, i64)>) {
+    if require.is_none() {
+      self.require = None
+    } else {
+      let require = require.unwrap();
+      self.require = Some((i64::min(self.bounds.1, i64::max(require.0, self.bounds.0)),
+                           i64::max(self.bounds.0, i64::min(require.1, self.bounds.1))));
+      let left_bound = self.left.get_bound();
+      let right_bound = self.right.get_bound();
+      match self.kind {
+        SymbolicOperationKind::Add => {
+          self.left.set_require(Some((self.require.unwrap().0 - right_bound.0,
+                                      self.require.unwrap().1 - right_bound.1)));
+          self.right.set_require(Some((self.require.unwrap().0 - left_bound.0,
+                                       self.require.unwrap().1 - left_bound.1)));
+        }
+        SymbolicOperationKind::Multiply => {
+          if (0, 0) == self.require.unwrap() {
+            if left_bound.0 > 0 || left_bound.1 < 0 {
+              self.right.set_require(Some((0, 0)));
+            } else if right_bound.0 > 0 || right_bound.0 < 0 {
+              self.left.set_require(Some((0, 0)));
+            }
+          }
+        }
+        SymbolicOperationKind::Divide => {
+          if (0, 0) == self.require.unwrap() {
+            if right_bound.0 > 0 {
+              self.left.set_require(Some((0, right_bound.0 - 1)));
+            }
+          }
+        }
+        _ => {},
+      }
+
     }
   }
 }
@@ -474,7 +523,7 @@ impl SymbolicState {
                 right: SymbolicValue,
                 ) -> SymbolicValue {
     let bounds = Self::compute_bounds(kind, left.get_bound(), right.get_bound());
-    let op = SymbolicOperation {name, kind, left, right, bounds};
+    let op = SymbolicOperation {name, kind, left, right, bounds, require: None};
     if let Some(answer) = op.literal_folding() {
       SymbolicValue::Literal(answer)
     } else if let Some(simplified) = op.reduction() {
@@ -539,6 +588,7 @@ fn main() {
       .collect();
 
   let symbolic = SymbolicState::interpret(&operators);
+  symbolic.z.set_require(Some((0,0)));
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
 }
