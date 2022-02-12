@@ -407,20 +407,19 @@ impl SymbolicOperation {
       let require = require.unwrap();
       self.require = Some((i64::min(self.bounds.1, i64::max(require.0, self.bounds.0)),
                            i64::max(self.bounds.0, i64::min(require.1, self.bounds.1))));
+      let require = self.require.unwrap();
       let left_bound = self.left.get_bound();
       let right_bound = self.right.get_bound();
       match self.kind {
         SymbolicOperationKind::Add => {
-          self.left.set_require(Some((self.require.unwrap().0 - right_bound.1,
-                                      self.require.unwrap().1 - right_bound.0)));
-          self.right.set_require(Some((self.require.unwrap().0 - left_bound.1,
-                                       self.require.unwrap().1 - left_bound.0)));
+          self.left.set_require(Some((require.0 - right_bound.1, require.1 - right_bound.0)));
+          self.right.set_require(Some((require.0 - left_bound.1, require.1 - left_bound.0)));
         }
         SymbolicOperationKind::Multiply => {
-          if (0, 0) == self.require.unwrap() {
+          if (0, 0) == require {
             if left_bound.0 > 0 || left_bound.1 < 0 {
               self.right.set_require(Some((0, 0)));
-            } else if right_bound.0 > 0 || right_bound.0 < 0 {
+            } else if right_bound.0 > 0 || right_bound.1 < 0 {
               self.left.set_require(Some((0, 0)));
             }
           }
@@ -429,6 +428,18 @@ impl SymbolicOperation {
           if (0, 0) == self.require.unwrap() {
             if right_bound.0 > 0 {
               self.left.set_require(Some((0, right_bound.0 - 1)));
+            }
+          }
+        }
+        SymbolicOperationKind::Equal => {
+          // Do we have a fixed answer that we need?
+          if require.0 == require.1 {
+            if require.0 == 1 {
+              // For true, set the bounds of each side to the other side.
+              self.left.set_require(Some(self.right.get_bound()));
+              self.right.set_require(Some(self.left.get_bound()));
+            } else if right_bound.0 == right_bound.1 && left_bound.0 == right_bound.0 {
+              self.left.set_require(Some((left_bound.0 + 1, left_bound.1)));
             }
           }
         }
