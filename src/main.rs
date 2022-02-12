@@ -411,10 +411,10 @@ impl SymbolicOperation {
       let right_bound = self.right.get_bound();
       match self.kind {
         SymbolicOperationKind::Add => {
-          self.left.set_require(Some((self.require.unwrap().0 - right_bound.0,
-                                      self.require.unwrap().1 - right_bound.1)));
-          self.right.set_require(Some((self.require.unwrap().0 - left_bound.0,
-                                       self.require.unwrap().1 - left_bound.1)));
+          self.left.set_require(Some((self.require.unwrap().0 - right_bound.1,
+                                      self.require.unwrap().1 - right_bound.0)));
+          self.right.set_require(Some((self.require.unwrap().0 - left_bound.1,
+                                       self.require.unwrap().1 - left_bound.0)));
         }
         SymbolicOperationKind::Multiply => {
           if (0, 0) == self.require.unwrap() {
