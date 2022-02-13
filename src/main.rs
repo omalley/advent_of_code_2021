@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::io::BufRead;
@@ -268,17 +269,25 @@ impl SymbolicValue {
     SymbolicValue{ranges}
   }
 
+  fn from_set(set: &BTreeSet<i64>) -> Self {
+    let mut ranges: Vec<ValueRange> = Vec::new();
+    for val in set.iter() {
+      if ranges.is_empty() || ranges.last().unwrap().upper != val - 1 {
+        ranges.push(ValueRange{lower: *val, upper: *val});
+      } else {
+        ranges.last_mut().unwrap().upper = *val;
+      }
+    }
+    SymbolicValue{ranges}
+  }
+
   // sort the ranges and remove duplicates
   fn normalize(&mut self) {
     if self.ranges.len() > 1 {
-      println!("start sort");
       self.ranges.sort();
-      self.ranges.dedup();
-      println!("end sort");
       let mut last = self.ranges[0].upper;
       let mut idx: usize = 1;
       while idx < self.ranges.len() {
-        println!("idx = {}/{}, last = {}", idx, self.ranges.len(), last);
         if self.ranges[idx].lower <= last {
           last = i64::max(last, self.ranges[idx].upper);
           self.ranges[idx - 1].upper = last;
@@ -312,45 +321,37 @@ impl SymbolicValue {
   }
 
   fn multiply(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result = SymbolicValue{ranges: Vec::new() };
+    let mut result: BTreeSet<i64> = BTreeSet::new();
     for left in self.get_values() {
       for right in other.get_values() {
-        let prod = left * right;
-        result.ranges.push(ValueRange{lower: prod, upper: prod});
+        result.insert(left * right);
       }
     }
-    result.normalize();
-    result
+    Self::from_set(&result)
   }
 
   fn divide(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result = SymbolicValue{ranges: Vec::new() };
+    let mut result: BTreeSet<i64> = BTreeSet::new();
     for left in self.get_values() {
       for right in other.get_values() {
         if right != 0 {
-          let ans = left / right;
-          result.ranges.push(ValueRange { lower: ans, upper: ans });
+          result.insert(left / right);
         }
       }
     }
-    result.normalize();
-    result
+    Self::from_set(&result)
   }
 
   fn modulo(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result = SymbolicValue{ranges: Vec::new() };
+    let mut result: BTreeSet<i64> = BTreeSet::new();
     for left in self.get_values() {
       for right in other.get_values() {
         if right > 0 {
-          let ans = left % right;
-          result.ranges.push(ValueRange { lower: ans, upper: ans });
+          result.insert(left % right);
         }
       }
     }
-    println!("start normalize with {}", result.ranges.len());
-    result.normalize();
-    println!("end normalize with {}", result.ranges.len());
-    result
+    Self::from_set(&result)
   }
 
   fn is_disjoint(&self, other: &SymbolicValue) -> bool {
