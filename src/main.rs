@@ -191,13 +191,13 @@ fn find_model(blocks: &[CodeBlock], state: &State) -> Option<Vec<i64>> {
 }
 
 #[derive(Clone, Debug)]
-enum SymbolicValue {
+enum SymbolicExpression {
   Input(i64),
   Literal(i64),
   Operation(Rc<RefCell<SymbolicOperation>>),
 }
 
-impl SymbolicValue {
+impl SymbolicExpression {
   fn get_literal(&self) -> Option<i64> {
     match self {
       Self::Literal(v) => Some(*v),
@@ -205,11 +205,11 @@ impl SymbolicValue {
     }
   }
 
-  fn get_bound(&self) -> (i64, i64) {
+  fn get_bound(&self) -> SymbolicValue {
     match self {
-      Self::Input(_) => (1, 9),
-      Self::Literal(v) => (*v, *v),
-      Self::Operation(x) => x.borrow().bounds,
+      Self::Input(_) => SymbolicValue::from_range(1, 9),
+      Self::Literal(v) => SymbolicValue::from_literal(*v),
+      Self::Operation(x) => x.borrow().bounds.clone(),
     }
   }
 
@@ -218,13 +218,6 @@ impl SymbolicValue {
       Self::Input(i) => format!("in_{}", i),
       Self::Literal(v) => format!("{}", v),
       Self::Operation(o) => format!("tmp_{:03}", o.borrow().name),
-    }
-  }
-
-  fn set_require(&self, bounds: Option<(i64, i64)>) {
-    match self {
-      Self::Operation(op) => op.borrow_mut().set_require(bounds),
-      _ => {},
     }
   }
 
@@ -237,20 +230,191 @@ impl SymbolicValue {
   }
 }
 
-impl fmt::Display for SymbolicValue {
+impl fmt::Display for SymbolicExpression {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{}", self.name())
+  }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ValueRange {
+  lower: i64,
+  upper: i64,
+}
+
+impl fmt::Display for ValueRange {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    if self.lower == self.upper {
+      write!(f, "{}", self.lower)
+    } else {
+      write!(f, "{}..{}", self.lower, self.upper)
+    }
+  }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SymbolicValue {
+  ranges: Vec<ValueRange>,
+}
+
+impl SymbolicValue {
+  fn from_literal(literal: i64) -> Self {
+    Self::from_range(literal, literal)
+  }
+
+  fn from_range(lower: i64, upper: i64) -> Self {
+    let mut ranges: Vec<ValueRange> = Vec::new();
+    ranges.push(ValueRange{lower, upper});
+    SymbolicValue{ranges}
+  }
+
+  // sort the ranges and remove duplicates
+  fn normalize(&mut self) {
+    if self.ranges.len() > 1 {
+      println!("start sort");
+      self.ranges.sort();
+      self.ranges.dedup();
+      println!("end sort");
+      let mut last = self.ranges[0].upper;
+      let mut idx: usize = 1;
+      while idx < self.ranges.len() {
+        println!("idx = {}/{}, last = {}", idx, self.ranges.len(), last);
+        if self.ranges[idx].lower <= last {
+          last = i64::max(last, self.ranges[idx].upper);
+          self.ranges[idx - 1].upper = last;
+          self.ranges.remove(idx);
+        } else {
+          idx += 1;
+        }
+      }
+    }
+  }
+
+  fn count(&self) -> usize {
+    self.ranges.iter().map(|r| (r.upper - r.lower + 1) as usize)
+        .fold(0, |a, b| a + b)
+  }
+
+  fn get_values(&self) -> SymbolicRangeIterator {
+    SymbolicRangeIterator{val: &self, next_range: 0, next_elem: 0}
+  }
+
+  fn add(&self, other: &SymbolicValue) -> SymbolicValue {
+    let mut result = SymbolicValue{ranges: Vec::new() };
+    for left in &self.ranges {
+      for right in &other.ranges {
+        result.ranges.push(ValueRange{lower: left.lower + right.lower,
+                                            upper: left.upper + right.upper});
+      }
+    }
+    result.normalize();
+    result
+  }
+
+  fn multiply(&self, other: &SymbolicValue) -> SymbolicValue {
+    let mut result = SymbolicValue{ranges: Vec::new() };
+    for left in self.get_values() {
+      for right in other.get_values() {
+        let prod = left * right;
+        result.ranges.push(ValueRange{lower: prod, upper: prod});
+      }
+    }
+    result.normalize();
+    result
+  }
+
+  fn divide(&self, other: &SymbolicValue) -> SymbolicValue {
+    let mut result = SymbolicValue{ranges: Vec::new() };
+    for left in self.get_values() {
+      for right in other.get_values() {
+        if right != 0 {
+          let ans = left / right;
+          result.ranges.push(ValueRange { lower: ans, upper: ans });
+        }
+      }
+    }
+    result.normalize();
+    result
+  }
+
+  fn modulo(&self, other: &SymbolicValue) -> SymbolicValue {
+    let mut result = SymbolicValue{ranges: Vec::new() };
+    for left in self.get_values() {
+      for right in other.get_values() {
+        if right > 0 {
+          let ans = left % right;
+          result.ranges.push(ValueRange { lower: ans, upper: ans });
+        }
+      }
+    }
+    println!("start normalize with {}", result.ranges.len());
+    result.normalize();
+    println!("end normalize with {}", result.ranges.len());
+    result
+  }
+
+  fn is_disjoint(&self, other: &SymbolicValue) -> bool {
+    let mut left_idx: usize = 0;
+    let mut right_idx: usize = 0;
+    while left_idx < self.ranges.len() && right_idx < other.ranges.len() {
+      let left = &self.ranges[left_idx];
+      let right = & other.ranges[right_idx];
+      if left.lower <= right.lower {
+        if right.lower <= left.upper {
+          return false;
+        }
+        left_idx += 1;
+      } else {
+        if left.lower <= right.upper {
+          return false;
+        }
+        right_idx += 1;
+      }
+    }
+    true
+  }
+}
+
+impl fmt::Display for SymbolicValue {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    let parts: Vec<String> = self.ranges.iter().map(|r| format!("{}", r)).collect();
+    write!(f, "{{ {} }}", parts.join(","))
+  }
+}
+
+#[derive(Debug)]
+struct SymbolicRangeIterator<'base> {
+  val: &'base SymbolicValue,
+  next_range: usize,
+  next_elem: usize,
+}
+
+impl<'base> Iterator for SymbolicRangeIterator<'base> {
+  type Item = i64;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    while self.next_range < self.val.ranges.len() {
+      let cur_range = &self.val.ranges[self.next_range];
+      let val = self.next_elem as i64 + cur_range.lower;
+      if val <= cur_range.upper {
+        self.next_elem += 1;
+        return Some(val);
+      } else {
+        self.next_range += 1;
+        self.next_elem = 0;
+      }
+    }
+    None
   }
 }
 
 #[derive(Clone, Debug)]
 struct SymbolicOperation {
   name: usize,
-  left: SymbolicValue,
-  right: SymbolicValue,
+  left: SymbolicExpression,
+  right: SymbolicExpression,
   kind: SymbolicOperationKind,
-  bounds: (i64, i64),
-  require: Option<(i64, i64)>,
+  bounds: SymbolicValue,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -316,11 +480,11 @@ impl SymbolicOperation {
       SymbolicOperationKind::Equal => {
         let left_bounds = self.left.get_bound();
         let right_bounds = self.right.get_bound();
-        if left_bounds.1 < right_bounds.0 || right_bounds.1 < left_bounds.0 {
+        if left_bounds.is_disjoint(&right_bounds) {
           // no overlap in the ranges
           Some(0)
-        } else if left_bounds.0 == left_bounds.1 && left_bounds.0 == right_bounds.0 &&
-            left_bounds.0 == right_bounds.1 {
+        } else if left_bounds.count() == 1 && right_bounds.count() == 1 &&
+            left_bounds == right_bounds {
           // one potential value on each side
           Some(1)
         } else {
@@ -333,7 +497,7 @@ impl SymbolicOperation {
 
   // Handle the cases where we don't need the operation, because it is an identity.
   // (eg. x + 0 or x * 1)
-  fn reduction(&self) -> Option<SymbolicValue> {
+  fn reduction(&self) -> Option<SymbolicExpression> {
     match self.kind {
       SymbolicOperationKind::Add => {
         let left_value = self.left.get_literal();
@@ -380,95 +544,19 @@ impl SymbolicOperation {
     if !done.contains(&self.name) {
       done.push(self.name);
       match &self.left {
-        SymbolicValue::Operation(op) =>
+        SymbolicExpression::Operation(op) =>
           op.borrow().print_operations(done),
         _ => {}
       }
       match &self.right {
-        SymbolicValue::Operation(op) =>
+        SymbolicExpression::Operation(op) =>
           op.borrow().print_operations(done),
         _ => {}
       }
       let left_bounds = self.left.get_bound();
       let right_bounds = self.right.get_bound();
-      print!("tmp_{:03} <- {} {} {} [{}..{} {} {}..{} = {}..{}]", self.name, self.left, self.kind, self.right,
-               left_bounds.0, left_bounds.1, self.kind, right_bounds.0, right_bounds.1, self.bounds.0, self.bounds.1);
-      if let Some(req) = self.require {
-        print!(" req: {}..{}", req.0, req.1);
-      }
-      println!();
-    }
-  }
-
-  fn propagate_multiply(&self, require:(i64, i64), other:(i64, i64)) -> Option<(i64,i64)> {
-    // if other can be zero, we don't know anything
-    if other.0 == 0 || other.1 == 0 || (other.0 > 0) != (other.1 > 0) {
-      None
-    } else if require.0 >= 0 {
-      // if we end up with a natural number
-      if other.0 > 0 {
-        Some((require.0/other.0, require.1/other.1))
-      } else {
-        Some((require.1/other.0, require.0/other.1))
-      }
-    } else if require.1 < 0 {
-      // if we end up with a negative number
-      if other.0 > 0 {
-        Some((require.0/other.1, require.1/other.0))
-      } else {
-        Some((require.1/other.1, require.0/other.0))
-      }
-    } else {
-      // or it can be either positive or negative
-      if other.0 > 0 {
-        Some((require.0/other.0, require.1/other.0))
-      } else {
-        Some((require.1/other.1, require.0/other.1))
-      }
-    }
-  }
-
-  fn set_require(&mut self, require: Option<(i64, i64)>) {
-    if require.is_none() {
-      self.require = None
-    } else {
-      let require = require.unwrap();
-      self.require = Some((i64::min(self.bounds.1, i64::max(require.0, self.bounds.0)),
-                           i64::max(self.bounds.0, i64::min(require.1, self.bounds.1))));
-      let require = self.require.unwrap();
-      let left_bound = self.left.get_bound();
-      let right_bound = self.right.get_bound();
-      match self.kind {
-        SymbolicOperationKind::Add => {
-          self.left.set_require(Some((require.0 - right_bound.1, require.1 - right_bound.0)));
-          self.right.set_require(Some((require.0 - left_bound.1, require.1 - left_bound.0)));
-        }
-        SymbolicOperationKind::Multiply => {
-          self.right.set_require(self.propagate_multiply(require, left_bound));
-          self.left.set_require(self.propagate_multiply(require, right_bound));
-        }
-        SymbolicOperationKind::Divide => {
-          if (0, 0) == self.require.unwrap() {
-            if right_bound.0 > 0 {
-              self.left.set_require(Some((0, right_bound.0 - 1)));
-            }
-          }
-        }
-        SymbolicOperationKind::Equal => {
-          // Do we have a fixed answer that we need?
-          if require.0 == require.1 {
-            if require.0 == 1 {
-              // For true, set the bounds of each side to the other side.
-              self.left.set_require(Some(self.right.get_bound()));
-              self.right.set_require(Some(self.left.get_bound()));
-            } else if right_bound.0 == right_bound.1 && left_bound.0 == right_bound.0 {
-              self.left.set_require(Some((left_bound.0 + 1, left_bound.1)));
-            }
-          }
-        }
-        _ => {},
-      }
-
+      println!("tmp_{:03} <- {} {} {} [{} {} {} = {}]", self.name, self.left, self.kind, self.right,
+               left_bounds, self.kind, right_bounds, self.bounds);
     }
   }
 }
@@ -487,23 +575,23 @@ impl fmt::Display for SymbolicOperationKind {
 
 #[derive(Clone, Debug)]
 struct SymbolicState {
-  w: SymbolicValue,
-  x: SymbolicValue,
-  y: SymbolicValue,
-  z: SymbolicValue,
+  w: SymbolicExpression,
+  x: SymbolicExpression,
+  y: SymbolicExpression,
+  z: SymbolicExpression,
 }
 
 impl SymbolicState {
   fn new() -> Self {
     SymbolicState{
-      w: SymbolicValue::Literal(0),
-      x: SymbolicValue::Literal(0),
-      y: SymbolicValue::Literal(0),
-      z: SymbolicValue::Literal(0),
+      w: SymbolicExpression::Literal(0),
+      x: SymbolicExpression::Literal(0),
+      y: SymbolicExpression::Literal(0),
+      z: SymbolicExpression::Literal(0),
     }
   }
 
-  fn set(&mut self, reg: &Register, value: SymbolicValue) {
+  fn set(&mut self, reg: &Register, value: SymbolicExpression) {
     match reg {
       Register::W => self.w = value,
       Register::X => self.x = value,
@@ -512,7 +600,7 @@ impl SymbolicState {
     }
   }
 
-  fn get(&self, reg: &Register) -> SymbolicValue {
+  fn get(&self, reg: &Register) -> SymbolicExpression {
     match reg {
       Register::W => self.w.clone(),
       Register::X => self.x.clone(),
@@ -521,56 +609,46 @@ impl SymbolicState {
     }
   }
 
-  fn get_value(&self, operand: &Operand) -> SymbolicValue {
+  fn get_value(&self, operand: &Operand) -> SymbolicExpression {
     match operand {
-      Operand::Value(val) => SymbolicValue::Literal(*val),
+      Operand::Value(val) => SymbolicExpression::Literal(*val),
       Operand::Register(reg) => self.get(reg),
     }
   }
 
   fn compute_bounds(kind:SymbolicOperationKind,
-                    left: (i64, i64), right: (i64, i64)) -> (i64, i64) {
+                    left: &SymbolicValue, right: &SymbolicValue) -> SymbolicValue {
     match kind {
-      SymbolicOperationKind::Add => (left.0 + right.0, left.1 + right.1),
-      SymbolicOperationKind::Multiply => (
-        i64::min(i64::min(left.0 * right.1, left.1 * right.0),
-                 i64::min(left.0 * right.0, left.1 * right.1)),
-        i64::max(i64::max(left.0 * right.1, left.1 * right.0),
-                 i64::max(left.0 * right.0, left.1 * right.1))
-      ),
-      SymbolicOperationKind::Divide => {
-        let right_lower = if right.0 == 0 { 1 } else { right.0 };
-        let right_upper = if right.1 == 0 { -1 } else { right.1 };
-        (i64::min(i64::min(left.0 / right_lower, left.1 / right_lower),
-                  i64::min(left.0 / right_upper, left.1 / right_upper)),
-         i64::max(i64::max(left.0 / right_lower, left.1 / right_lower),
-                  i64::max(left.0 / right_upper, left.1 / right_upper)))
-      }
-      SymbolicOperationKind::Modulo => (0, right.1 - 1),
-      SymbolicOperationKind::Equal => (0, 1),
+      SymbolicOperationKind::Add => left.add(&right),
+      SymbolicOperationKind::Multiply => left.multiply(&right),
+      SymbolicOperationKind::Divide => left.divide(&right),
+      SymbolicOperationKind::Modulo => left.modulo(&right),
+      SymbolicOperationKind::Equal => SymbolicValue::from_range(0, 1),
     }
   }
 
   fn make_value(name: usize,
                 kind: SymbolicOperationKind,
-                left: SymbolicValue,
-                right: SymbolicValue,
-                ) -> SymbolicValue {
-    let bounds = Self::compute_bounds(kind, left.get_bound(), right.get_bound());
-    let op = SymbolicOperation {name, kind, left, right, bounds, require: None};
+                left: SymbolicExpression,
+                right: SymbolicExpression,
+                ) -> SymbolicExpression {
+    let bounds = Self::compute_bounds(kind, &left.get_bound(), &right.get_bound());
+    let op = SymbolicOperation {name, kind, left, right, bounds};
     if let Some(answer) = op.literal_folding() {
-      SymbolicValue::Literal(answer)
+      SymbolicExpression::Literal(answer)
     } else if let Some(simplified) = op.reduction() {
       simplified
     } else {
-      SymbolicValue::Operation(Rc::new(RefCell::new(op)))
+      SymbolicExpression::Operation(Rc::new(RefCell::new(op)))
     }
   }
 
   fn interpret_operation(&mut self, op: &Operation, operation_idx: &mut usize, input_idx: &mut i64) {
+    println!("starting {}: {:?}", *operation_idx, op);
+    println!("{}", self);
     match op {
       Operation::Input(reg) => {
-        self.set(reg, SymbolicValue::Input(*input_idx));
+        self.set(reg, SymbolicExpression::Input(*input_idx));
         *input_idx += 1;
       }
       Operation::Add(reg, operand) =>
@@ -613,6 +691,15 @@ impl SymbolicState {
   }
 }
 
+impl fmt::Display for SymbolicState {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    writeln!(f, "w: {} {}", self.w, self.w.get_bound().count());
+    writeln!(f, "x: {} {}", self.x, self.x.get_bound().count());
+    writeln!(f, "y: {} {}", self.y, self.y.get_bound().count());
+    writeln!(f, "z: {} {}", self.z, self.z.get_bound().count())
+  }
+}
+
 fn main() {
   let stdin = io::stdin();
   let operators: Vec<Operation> = stdin.lock().lines()
@@ -622,7 +709,6 @@ fn main() {
       .collect();
 
   let symbolic = SymbolicState::interpret(&operators);
-  symbolic.z.set_require(Some((0,0)));
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
 }
