@@ -400,6 +400,34 @@ impl SymbolicOperation {
     }
   }
 
+  fn propagate_multiply(&self, require:(i64, i64), other:(i64, i64)) -> Option<(i64,i64)> {
+    // if other can be zero, we don't know anything
+    if other.0 == 0 || other.1 == 0 || (other.0 > 0) != (other.1 > 0) {
+      None
+    } else if require.0 >= 0 {
+      // if we end up with a natural number
+      if other.0 > 0 {
+        Some((require.0/other.0, require.1/other.1))
+      } else {
+        Some((require.1/other.0, require.0/other.1))
+      }
+    } else if require.1 < 0 {
+      // if we end up with a negative number
+      if other.0 > 0 {
+        Some((require.0/other.1, require.1/other.0))
+      } else {
+        Some((require.1/other.1, require.0/other.0))
+      }
+    } else {
+      // or it can be either positive or negative
+      if other.0 > 0 {
+        Some((require.0/other.0, require.1/other.0))
+      } else {
+        Some((require.1/other.1, require.0/other.1))
+      }
+    }
+  }
+
   fn set_require(&mut self, require: Option<(i64, i64)>) {
     if require.is_none() {
       self.require = None
@@ -416,13 +444,8 @@ impl SymbolicOperation {
           self.right.set_require(Some((require.0 - left_bound.1, require.1 - left_bound.0)));
         }
         SymbolicOperationKind::Multiply => {
-          if (0, 0) == require {
-            if left_bound.0 > 0 || left_bound.1 < 0 {
-              self.right.set_require(Some((0, 0)));
-            } else if right_bound.0 > 0 || right_bound.1 < 0 {
-              self.left.set_require(Some((0, 0)));
-            }
-          }
+          self.right.set_require(self.propagate_multiply(require, left_bound));
+          self.left.set_require(self.propagate_multiply(require, right_bound));
         }
         SymbolicOperationKind::Divide => {
           if (0, 0) == self.require.unwrap() {
