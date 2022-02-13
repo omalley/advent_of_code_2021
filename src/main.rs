@@ -378,8 +378,13 @@ impl SymbolicValue {
 
 impl fmt::Display for SymbolicValue {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    let parts: Vec<String> = self.ranges.iter().map(|r| format!("{}", r)).collect();
-    write!(f, "{{ {} }}", parts.join(","))
+    if self.ranges.len() < 10 {
+      let parts: Vec<String> = self.ranges.iter().map(|r| format!("{}", r)).collect();
+      write!(f, "{{ {} ({})}}", parts.join(", "), self.count())
+    } else {
+      write!(f, "{{ {}...{} ({})}}", self.ranges.first().unwrap().lower,
+             self.ranges.last().unwrap().upper, self.count())
+    }
   }
 }
 
