@@ -229,6 +229,13 @@ impl SymbolicExpression {
       _ => {},
     }
   }
+
+  fn propagate_back(&self, val: &SymbolicValue) {
+    match self {
+      Self::Operation(o) => o.borrow_mut().propagate_back(val),
+      _ => {},
+    }
+  }
 }
 
 impl fmt::Display for SymbolicExpression {
@@ -281,24 +288,6 @@ impl SymbolicValue {
     SymbolicValue{ranges}
   }
 
-  // sort the ranges and remove duplicates
-  fn normalize(&mut self) {
-    if self.ranges.len() > 1 {
-      self.ranges.sort();
-      let mut last = self.ranges[0].upper;
-      let mut idx: usize = 1;
-      while idx < self.ranges.len() {
-        if self.ranges[idx].lower <= last {
-          last = i64::max(last, self.ranges[idx].upper);
-          self.ranges[idx - 1].upper = last;
-          self.ranges.remove(idx);
-        } else {
-          idx += 1;
-        }
-      }
-    }
-  }
-
   fn count(&self) -> usize {
     self.ranges.iter().map(|r| (r.upper - r.lower + 1) as usize)
         .fold(0, |a, b| a + b)
@@ -308,50 +297,48 @@ impl SymbolicValue {
     SymbolicRangeIterator{val: &self, next_range: 0, next_elem: 0}
   }
 
-  fn add(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result = SymbolicValue{ranges: Vec::new() };
-    for left in &self.ranges {
-      for right in &other.ranges {
-        result.ranges.push(ValueRange{lower: left.lower + right.lower,
-                                            upper: left.upper + right.upper});
-      }
-    }
-    result.normalize();
-    result
-  }
-
-  fn multiply(&self, other: &SymbolicValue) -> SymbolicValue {
+  fn propagate<F>(&self, other: &SymbolicValue, func: F) -> SymbolicValue
+      where F: Fn(i64, i64) -> Option<i64> {
     let mut result: BTreeSet<i64> = BTreeSet::new();
     for left in self.get_values() {
       for right in other.get_values() {
-        result.insert(left * right);
+        match func(left, right) {
+          None => false,
+          Some(val) => result.insert(val),
+        };
       }
     }
     Self::from_set(&result)
   }
 
-  fn divide(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result: BTreeSet<i64> = BTreeSet::new();
-    for left in self.get_values() {
-      for right in other.get_values() {
-        if right != 0 {
-          result.insert(left / right);
-        }
+  // Given a set of potential values for the left, right, and answer, find the inputs
+  // that give one of the desired answers.
+  fn propagate_back<F>(left: &SymbolicValue, right: &SymbolicValue,
+                       answer: &SymbolicValue, func: F) -> (SymbolicValue, SymbolicValue)
+      where F: Fn(i64, i64) -> Option<i64> {
+    let mut left_result: BTreeSet<i64> = BTreeSet::new();
+    let mut right_result: BTreeSet<i64> = BTreeSet::new();
+    for left_value in left.get_values() {
+      for right_value in right.get_values() {
+        match func(left_value, right_value) {
+          None => { },
+          Some(val) => if answer.contains(val) {
+            left_result.insert(left_value);
+            right_result.insert(right_value);
+          }
+        };
       }
     }
-    Self::from_set(&result)
+    (Self::from_set(&left_result), Self::from_set(&right_result))
   }
 
-  fn modulo(&self, other: &SymbolicValue) -> SymbolicValue {
-    let mut result: BTreeSet<i64> = BTreeSet::new();
-    for left in self.get_values() {
-      for right in other.get_values() {
-        if right > 0 {
-          result.insert(left % right);
-        }
+  fn contains(&self, value: i64) -> bool {
+    for rng in &self.ranges {
+      if value >= rng.lower && value <= rng.upper {
+        return true;
       }
     }
-    Self::from_set(&result)
+    false
   }
 
   fn is_disjoint(&self, other: &SymbolicValue) -> bool {
@@ -421,15 +408,6 @@ struct SymbolicOperation {
   right: SymbolicExpression,
   kind: SymbolicOperationKind,
   bounds: SymbolicValue,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum SymbolicOperationKind {
-  Add,
-  Multiply,
-  Divide,
-  Modulo,
-  Equal,
 }
 
 impl SymbolicOperation {
@@ -565,6 +543,52 @@ impl SymbolicOperation {
                left_bounds, self.kind, right_bounds, self.bounds);
     }
   }
+
+  fn propagate_back(&mut self, val: &SymbolicValue) {
+    if self.bounds.count() != val.count() {
+      self.bounds = val.clone();
+      let (left, right) = SymbolicValue::propagate_back(
+        &self.left.get_bound(),
+        &self.right.get_bound(),
+        &self.bounds,
+        self.kind.operation());
+      self.left.propagate_back(&left);
+      self.right.propagate_back(&right);
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SymbolicOperationKind {
+  Add,
+  Multiply,
+  Divide,
+  Modulo,
+  Equal,
+}
+
+impl SymbolicOperationKind {
+  fn operation(&self) -> impl Fn(i64, i64) -> Option<i64> {
+    match self {
+      Self::Add => move |l, r| Some (l+r),
+      Self::Multiply => move |l, r| Some (l*r),
+      Self::Divide => move |l, r| {
+        if r == 0 {
+          None
+        } else {
+          Some(l/r)
+        }
+      },
+      Self::Modulo => move |l, r| {
+        if r <= 0 {
+          None
+        } else {
+          Some(l % r)
+        }
+      },
+      Self::Equal => move |l, r| Some(if l == r {1} else {0}),
+    }
+  }
 }
 
 impl fmt::Display for SymbolicOperationKind {
@@ -622,23 +646,13 @@ impl SymbolicState {
     }
   }
 
-  fn compute_bounds(kind:SymbolicOperationKind,
-                    left: &SymbolicValue, right: &SymbolicValue) -> SymbolicValue {
-    match kind {
-      SymbolicOperationKind::Add => left.add(&right),
-      SymbolicOperationKind::Multiply => left.multiply(&right),
-      SymbolicOperationKind::Divide => left.divide(&right),
-      SymbolicOperationKind::Modulo => left.modulo(&right),
-      SymbolicOperationKind::Equal => SymbolicValue::from_range(0, 1),
-    }
-  }
-
   fn make_value(name: usize,
                 kind: SymbolicOperationKind,
                 left: SymbolicExpression,
                 right: SymbolicExpression,
                 ) -> SymbolicExpression {
-    let bounds = Self::compute_bounds(kind, &left.get_bound(), &right.get_bound());
+    let bounds = left.get_bound().propagate(&right.get_bound(),
+                                            kind.operation());
     let op = SymbolicOperation {name, kind, left, right, bounds};
     if let Some(answer) = op.literal_folding() {
       SymbolicExpression::Literal(answer)
@@ -717,4 +731,6 @@ fn main() {
   let symbolic = SymbolicState::interpret(&operators);
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
+  symbolic.z.propagate_back(&SymbolicValue::from_literal(0));
+  symbolic.z.print_operations();
 }
