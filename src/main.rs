@@ -135,7 +135,7 @@ impl State {
 
   fn find_input(&self, program: &[Operation], target: &[Option<i64>]) -> Option<Vec<i64>> {
     println!("Program {}: {:?}", program.len(), program.first().unwrap());
-    'input: for input_value in (1..=9).rev() {
+    'input: for input_value in 1..=9 {
       println!("At {} Trying {}", program.len(), input_value);
       let mut state = self.clone();
       let mut pc = 0;
