@@ -135,62 +135,6 @@ impl State {
   }
 }
 
-#[derive(Debug, Default)]
-struct CodeBlock {
-  block: Vec<Operation>,
-}
-
-impl CodeBlock {
-  fn evaluate(&self, state: &mut State, input: i64) -> bool {
-    for op in &self.block {
-      if !op.evaluate(state, input) {
-        return false;
-      }
-    }
-    true
-  }
-}
-
-// Destructively splits a list of operations into blocks where each block
-// starts with an input.
-fn split_blocks(ops: &mut Vec<Operation>) -> Vec<CodeBlock> {
-  let mut result: Vec<CodeBlock> = Vec::new();
-  let mut current = CodeBlock::default();
-  while !ops.is_empty() {
-    if let Some(Operation::Input(_)) = ops.get(0) {
-      if current.block.len() > 0 {
-        result.push(current);
-        current = CodeBlock::default();
-      }
-    }
-    current.block.push(ops.remove(0));
-  }
-  if current.block.len() > 0 {
-    result.push(current);
-  }
-  result
-}
-
-fn find_model(blocks: &[CodeBlock], state: &State) -> Option<Vec<i64>> {
-  for next_input in (1..=9).rev() {
-    let mut next_state = state.clone();
-    if blocks[0].evaluate(&mut next_state, next_input) {
-      if blocks.len() > 1 {
-        if let Some(answer) = find_model(&blocks[1..], &next_state) {
-          let mut result: Vec<i64> = Vec::new();
-          result.push(next_input);
-          for a in answer {
-            result.push(a)
-          }
-        }
-      } else if next_state.z == 0 {
-        return Some(vec![next_input])
-      }
-    }
-  }
-  None
-}
-
 #[derive(Clone, Debug)]
 enum SymbolicExpression {
   Input(i64),
@@ -713,9 +657,9 @@ impl SymbolicState {
 
 impl fmt::Display for SymbolicState {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    writeln!(f, "w: {} {}", self.w, self.w.get_bound().count());
-    writeln!(f, "x: {} {}", self.x, self.x.get_bound().count());
-    writeln!(f, "y: {} {}", self.y, self.y.get_bound().count());
+    writeln!(f, "w: {} {}", self.w, self.w.get_bound().count())?;
+    writeln!(f, "x: {} {}", self.x, self.x.get_bound().count())?;
+    writeln!(f, "y: {} {}", self.y, self.y.get_bound().count())?;
     writeln!(f, "z: {} {}", self.z, self.z.get_bound().count())
   }
 }
@@ -731,6 +675,7 @@ fn main() {
   let symbolic = SymbolicState::interpret(&operators);
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
+  println!();
   symbolic.z.propagate_back(&SymbolicValue::from_literal(0));
   symbolic.z.print_operations();
 }
