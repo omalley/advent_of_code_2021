@@ -69,34 +69,32 @@ impl Operation {
 
   // Evaluate the operation in the given state and input.
   // Updates the state.
-  fn evaluate(&self, state: &mut State, input: i64) -> bool {
+  fn evaluate(&self, state: &mut State, input: i64) -> i64 {
     match self {
-      Self::Input(reg) => {
-        state.set(reg, input);
-      },
+      Self::Input(reg) => state.set(reg, input),
       Self::Add(reg, operand) =>
         state.set(reg, state.get(reg) + state.get_value(operand)),
       Self::Multiply(reg, operand) =>
         state.set(reg, state.get(reg) * state.get_value(operand)),
       Self::Divide(reg, operand) => {
         let right = state.get_value(operand);
-        if right == 0 {
-          return false;
-        }
         state.set(reg, state.get(reg) / right)
       },
       Self::Modulo(reg, operand) => {
         let left = state.get(reg);
         let right = state.get_value(operand);
-        if left < 0 || right <= 0 {
-          return false;
-        }
         state.set(reg, left % right)
       },
       Self::Equal(reg, operand) =>
         state.set(reg, if state.get(reg) == state.get_value(operand) {1} else {0}),
     }
-    return true
+  }
+
+  fn is_input(&self) -> bool {
+    match self {
+      Self::Input(_) => true,
+      _ => false,
+    }
   }
 }
 
@@ -109,13 +107,14 @@ struct State {
 }
 
 impl State {
-  fn set(&mut self, reg: &Register, value: i64) {
+  fn set(&mut self, reg: &Register, value: i64) -> i64{
     match reg {
       Register::W => self.w = value,
       Register::X => self.x = value,
       Register::Y => self.y = value,
       Register::Z => self.z = value,
     }
+    value
   }
 
   fn get(&self, reg: &Register) -> i64 {
@@ -132,6 +131,38 @@ impl State {
       Operand::Register(reg) => self.get(reg),
       Operand::Value(val) => *val,
     }
+  }
+
+  fn find_input(&self, program: &[Operation], target: &[Option<i64>]) -> Option<Vec<i64>> {
+    println!("Program {}: {:?}", program.len(), program.first().unwrap());
+    'input: for input_value in (1..=9).rev() {
+      println!("At {} Trying {}", program.len(), input_value);
+      let mut state = self.clone();
+      let mut pc = 0;
+      while pc < program.len() && (pc == 0 || !program[pc].is_input()) {
+        let val = program[pc].evaluate(&mut state, input_value);
+        match target[pc] {
+          Some(tgt) => if tgt != val {
+            continue 'input
+          },
+          _ => {},
+        }
+        pc += 1;
+      }
+      if pc == program.len() {
+        return Some(vec![input_value]);
+      } else {
+       match state.find_input(&program[pc..], &target[pc..]) {
+         Some(answer) => {
+           let mut result = answer.clone();
+           result.push(input_value);
+           return Some(result);
+         }
+         _ => {},
+       }
+      }
+    }
+    None
   }
 }
 
@@ -177,6 +208,20 @@ impl SymbolicExpression {
   fn propagate_back(&self, val: &SymbolicValue) {
     match self {
       Self::Operation(o) => o.borrow_mut().propagate_back(val),
+      _ => {},
+    }
+  }
+
+  fn find_operations(&self, operations:&mut Vec<Option<Rc<RefCell<SymbolicOperation>>>>) {
+    match self {
+      Self::Operation(o) => {
+        let op = o.borrow();
+        if operations[op.name].is_none() {
+          operations[op.name] = Some(o.clone());
+          op.left.find_operations(operations);
+          op.right.find_operations(operations);
+        }
+      },
       _ => {},
     }
   }
@@ -608,8 +653,6 @@ impl SymbolicState {
   }
 
   fn interpret_operation(&mut self, op: &Operation, operation_idx: &mut usize, input_idx: &mut i64) {
-    println!("starting {}: {:?}", *operation_idx, op);
-    println!("{}", self);
     match op {
       Operation::Input(reg) => {
         self.set(reg, SymbolicExpression::Input(*input_idx));
@@ -666,16 +709,40 @@ impl fmt::Display for SymbolicState {
 
 fn main() {
   let stdin = io::stdin();
-  let operators: Vec<Operation> = stdin.lock().lines()
+  let program: Vec<Operation> = stdin.lock().lines()
       .map(|x| String::from(x.unwrap()))
       .filter(|x| x.len() > 0)
       .map(|x| Operation::parse(&x).unwrap())
       .collect();
 
-  let symbolic = SymbolicState::interpret(&operators);
+  let symbolic = SymbolicState::interpret(&program);
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
   println!();
+
   symbolic.z.propagate_back(&SymbolicValue::from_literal(0));
   symbolic.z.print_operations();
+
+  // Get the list of operations that impact the final z value
+  let mut operations: Vec<Option<Rc<RefCell<SymbolicOperation>>>> = vec![None; program.len()];
+  symbolic.z.find_operations(&mut operations);
+  let mut needed: Vec<bool> = vec![false; program.len()];
+  let mut target: Vec<Option<i64>> = vec![None; program.len()];
+  for i in 0..program.len() {
+    // If the operation has a single valid value, record it as a target.
+    match &operations[i] {
+      Some(op) => {
+        let bound = &op.borrow().bounds;
+        if bound.count() == 1 {
+          target[i] = Some(bound.ranges.first().unwrap().lower);
+          println!("operation {}: {:?} = {}", i, program[i], target[i].unwrap());
+        }
+      }
+      _ => {}
+    }
+    // Record whether we need to execute that instruction
+    needed[i] = operations[i].is_some() || program[i].is_input();
+  }
+  let result = State::default().find_input(&program, &target);
+  println!("result: {:?}", result);
 }
