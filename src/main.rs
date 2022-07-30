@@ -16,7 +16,6 @@ enum AmphipodKind {
   Desert = 3,
 }
 
-
 impl AmphipodKind {
   fn energy(&self) -> usize {
     match self {
@@ -57,7 +56,7 @@ struct Amphipod {
 
 struct State {
   energy: usize,
-  amphipods: [Amphipod; Caves::NUM_ROOMS * Caves::ROOM_SIZE],
+  amphipods: Vec<Amphipod>,
 }
 
 impl State {
@@ -74,7 +73,7 @@ impl State {
 impl fmt::Display for State {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     write!(f, "energy: {} [", self.energy)?;
-    for a in self.amphipods {
+    for a in &self.amphipods {
       write!(f, "{}: {}, ", a.kind.name(), a.spot)?;
     }
     write!(f, "]")
@@ -127,14 +126,11 @@ struct Caves {
 }
 
 impl Caves {
-  const NUM_ROOMS: usize = 4;
-  const ROOM_SIZE: usize = 4;
-  
   fn parse(input: &mut dyn Iterator<Item = String>) -> Self {
     let lines: Vec<String> = input.collect();
     let mut spots: Vec<Spot> = Vec::new();
     let mut amphipods: Vec<Amphipod> = Vec::new();
-    let mut goals: Vec<Vec<usize>> = vec![Vec::new(); Self::NUM_ROOMS];
+    let mut goals: Vec<Vec<usize>> = vec![Vec::new(); AmphipodKind::iter().len()];
     // assume the shape is still the same
     let hallway: Vec<char>  = lines[1].chars().collect();
     let rooms: Vec<char> = lines[2].chars().collect();
@@ -144,7 +140,7 @@ impl Caves {
         spots.push(Spot{id, x, y:1, is_home: None, exits: Vec::new()});
       }
     }
-    for y in 2..2+Self::ROOM_SIZE {
+    for y in 2..lines.len() {
       let rooms: Vec<char> = lines[y].chars().collect();
       let mut kind_itr = AmphipodKind::iter();
       let mut room_num = 0;
