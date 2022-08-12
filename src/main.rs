@@ -39,7 +39,7 @@ impl Operand {
 
 #[derive(Debug)]
 enum Operation {
-  Input(Register),
+  Input(usize, Register),
   Add(Register, Operand),
   Multiply(Register, Operand),
   Divide(Register, Operand),
@@ -48,12 +48,16 @@ enum Operation {
 }
 
 impl Operation {
-  fn parse_statement(line: &str) -> Result<Self, String> {
+  fn parse_statement(line: &str, next_input: &mut usize) -> Result<Self, String> {
     let words: Vec<String> = line.split_ascii_whitespace()
         .map(|x| String::from(x)).collect();
     let register = Register::parse(&words[1])?;
     match words[0].as_str() {
-      "inp" => Ok(Self::Input(register)),
+      "inp" => {
+        let id = *next_input;
+        *next_input += 1;
+        Ok(Self::Input(id, register))
+      },
       "add" => Ok(Self::Add(register, Operand::parse(&words[2])?)),
       "mul" => Ok(Self::Multiply(register, Operand::parse(&words[2])?)),
       "div" => Ok(Self::Divide(register, Operand::parse(&words[2])?)),
@@ -64,9 +68,10 @@ impl Operation {
   }
 
   fn parse(lines: &mut dyn Iterator<Item=Result<String,Error>>) -> Vec<Self> {
+    let mut next_input = 0;
     lines.map(|x| String::from(x.unwrap()))
         .filter(|x| x.len() > 0)
-        .map(|x| Operation::parse_statement(&x).unwrap())
+        .map(|x| Operation::parse_statement(&x, &mut next_input).unwrap())
         .collect()
   }
 }
@@ -101,7 +106,7 @@ impl State {
         }
     }
   }
-  
+
   // Evaluate the operation in the given state and input.
   // Updates the state.
   fn evaluate(&mut self, program: &[Operation], input: &[i64]) -> i64 {
@@ -109,10 +114,8 @@ impl State {
       self.z
     } else {
       match &program[0] {
-        Operation::Input(reg) => {
-          *self.get_ref(reg) = input[0];
-          return self.evaluate(&program[1..], &input[1..])
-        },
+        Operation::Input(id, reg) =>
+          *self.get_ref(reg) = input[*id],
         Operation::Add(reg, operand) =>
           *self.get_ref(reg) = *self.get_ref(reg) + self.get_value(operand),
         Operation::Multiply(reg, operand) =>
@@ -128,6 +131,12 @@ impl State {
       self.evaluate(&program[1..], input)
     }
   }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PotentialValue {
+  value: i64,
+  inputs: Vec<u64>,
 }
 
 fn main() {
