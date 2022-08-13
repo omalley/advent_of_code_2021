@@ -101,12 +101,17 @@ impl Operation {
   }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct State {
   register: [i64; Register::SIZE],
 }
 
 impl State {
+  fn init(w: i64, x: i64, y: i64, z: i64) -> Self {
+    let register = [w, x, y, z];
+    State{register}
+  }
+
   fn get_value(&self, op: &Operand) -> i64 {
     match op {
       Operand::Value(i) => *i,
@@ -177,13 +182,34 @@ mod tests {
   use crate::{InputDescriptor, Operation, State};
 
   #[test]
+  fn test_mini_execution() {
+    let mut text = vec!{
+      "inp w",
+      "add z w",
+      "mod z 2",
+      "div w 2",
+      "add y w",
+      "mod y 2",
+      "div w 2",
+      "add x w",
+      "mod x 2",
+      "div w 2",
+      "mod w 2"};
+    let program = Operation::parse(&mut text.iter()
+      .map(|l| Ok(l.to_string()))).unwrap();
+    let input = vec![9];
+    let mut state = State::default();
+    state.evaluate(&program, &input);
+    assert_eq!(State::init(1,0,0,1), state);
+  }
+
+  #[test]
   fn test_execution() {
     let program = Operation::parse_file("input24.txt").unwrap();
     let input = vec![3,9,9,9,9,6,9,8,7,9,9,4,2,9];
     let mut state = State::default();
     state.evaluate(&program, &input);
-    assert_eq!(9, state.register[0]);
-    assert_eq!(0, state.register[3]);
+    assert_eq!(State::init(9, 0, 0, 0), state);
   }
 
   #[test]
