@@ -131,11 +131,6 @@ struct InputDescriptor {
   inputs: Vec<u64>,
 }
 
-impl InputDescriptor {
-  fn add_input_value(&mut self, position: usize, value: i64) {
-
-  }
-}
 #[derive(Clone, Debug)]
 struct SymbolicState {
   registers: [HashMap<i64, InputDescriptor>; Register::SIZE],
