@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 use std::io::BufRead;
 use std::rc::Rc;
+use std::time::SystemTime;
 
 #[derive (Debug)]
 enum Register {
@@ -134,9 +135,7 @@ impl State {
   }
 
   fn find_input(&self, program: &[Operation], target: &[Option<i64>]) -> Option<Vec<i64>> {
-    println!("Program {}: {:?}", program.len(), program.first().unwrap());
     'input: for input_value in (1..=9).rev() {
-      println!("At {} Trying {}", program.len(), input_value);
       let mut state = self.clone();
       let mut pc = 0;
       while pc < program.len() && (pc == 0 || !program[pc].is_input()) {
@@ -715,15 +714,19 @@ fn main() {
       .map(|x| Operation::parse(&x).unwrap())
       .collect();
 
+  let mut start = SystemTime::now();
   let symbolic = SymbolicState::interpret(&program);
   symbolic.z.print_operations();
   println!("z = {}", symbolic.z);
-  println!();
+  println!("forward propagate time = {}", SystemTime::now().duration_since(start).unwrap().as_secs());
 
+  start = SystemTime::now();
   symbolic.z.propagate_back(&SymbolicValue::from_literal(0));
   symbolic.z.print_operations();
+  println!("back propagate time = {}", SystemTime::now().duration_since(start).unwrap().as_secs());
 
   // Get the list of operations that impact the final z value
+  start = SystemTime::now();
   let mut operations: Vec<Option<Rc<RefCell<SymbolicOperation>>>> = vec![None; program.len()];
   symbolic.z.find_operations(&mut operations);
   let mut needed: Vec<bool> = vec![false; program.len()];
@@ -743,6 +746,9 @@ fn main() {
     // Record whether we need to execute that instruction
     needed[i] = operations[i].is_some() || program[i].is_input();
   }
+  println!("limit time = {}", SystemTime::now().duration_since(start).unwrap().as_secs());
+  start = SystemTime::now();
   let result = State::default().find_input(&program, &target);
+  println!("search time = {}", SystemTime::now().duration_since(start).unwrap().as_secs());
   println!("result: {:?}", result);
 }
