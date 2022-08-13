@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::io;
-use std::io::{BufRead, Error};
+use std::io::{BufRead, Error, ErrorKind};
 
 #[derive (Debug)]
 enum Register {
@@ -11,13 +12,13 @@ enum Register {
 }
 
 impl Register {
-  fn parse(line: &str) -> Result<Self, String> {
+  fn parse(line: &str) -> io::Result<Self> {
     match line {
       "w" => Ok(Self::W),
       "x" => Ok(Self::X),
       "y" => Ok(Self::Y),
       "z" => Ok(Self::Z),
-      _ => Err(format!("Unknown register {}", line)),
+      _ => Err(Error::new(ErrorKind::Other, format!("Unknown register {}", line))),
     }
   }
 
@@ -39,7 +40,7 @@ enum Operand {
 }
 
 impl Operand {
-  fn parse(line: &str) -> Result<Self, String> {
+  fn parse(line: &str) -> io::Result<Self> {
     if let Ok(val) = line.parse::<i64>() {
       Ok(Self::Value(val))
     } else {
@@ -59,7 +60,7 @@ enum Operation {
 }
 
 impl Operation {
-  fn parse_statement(line: &str, next_input: &mut usize) -> Result<Self, String> {
+  fn parse_statement(line: &str, next_input: &mut usize) -> io::Result<Self> {
     let words: Vec<String> = line.split_ascii_whitespace()
         .map(|x| String::from(x)).collect();
     let register = Register::parse(&words[1])?;
@@ -74,16 +75,29 @@ impl Operation {
       "div" => Ok(Self::Divide(register, Operand::parse(&words[2])?)),
       "mod" => Ok(Self::Modulo(register, Operand::parse(&words[2])?)),
       "eql" => Ok(Self::Equal(register, Operand::parse(&words[2])?)),
-      _ => Err(format!("Unknown operator {}", words[0]))
+      _ => Err(Error::new(ErrorKind::Other, format!("Unknown operator {}", words[0]))),
     }
   }
 
-  fn parse(lines: &mut dyn Iterator<Item=Result<String,Error>>) -> Vec<Self> {
+  fn parse(lines: &mut dyn Iterator<Item=io::Result<String>>) -> io::Result<Vec<Self>> {
     let mut next_input = 0;
-    lines.map(|x| String::from(x.unwrap()))
-        .filter(|x| x.len() > 0)
-        .map(|x| Operation::parse_statement(&x, &mut next_input).unwrap())
-        .collect()
+    let mut result = Vec::new();
+    for l in lines {
+      match l {
+        Ok(s) => {
+          if s.len() > 0 {
+            result.push(Self::parse_statement(&s, &mut next_input)?)
+          }
+        },
+        Err(e) => return Err(e),
+      }
+    }
+    Ok(result)
+  }
+
+  fn parse_file(filename: &str) -> io::Result<Vec<Self>> {
+    let file = File::open(filename)?;
+    Self::parse(&mut io::BufReader::new(file).lines())
   }
 }
 
@@ -126,9 +140,23 @@ impl State {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct InputDescriptor {
   inputs: Vec<u64>,
+}
+
+impl InputDescriptor {
+  fn init(input_idx: usize, value: i64) -> Self {
+    let inputs = vec!{(value << (input_idx * 4)) as u64};
+    InputDescriptor{inputs}
+  }
+
+  fn mark_input(&mut self, input_idx: usize, value: i64) {
+    for val in self.inputs.iter_mut() {
+      let mask = 0xf << (input_idx * 4);
+      *val = (*val & !mask) | (value << (input_idx * 4)) as u64;
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -137,9 +165,25 @@ struct SymbolicState {
 }
 
 fn main() {
-  let program = Operation::parse(&mut io::stdin().lock().lines());
+  let program = Operation::parse(&mut io::stdin().lock().lines()).unwrap();
   let input = vec![3,9,9,9,9,6,9,8,7,9,9,4,2,9];
   let mut state = State::default();
   state.evaluate(&program, &input);
   println!("result = {:?}", &state);
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::InputDescriptor;
+
+  #[test]
+  fn test_input_descriptor() {
+    let mut descr = InputDescriptor::init(1, 2);
+    assert_eq!(1, descr.inputs.len());
+    assert_eq!(0x20, descr.inputs[0]);
+    descr.mark_input(4, 3);
+    assert_eq!(0x30020, descr.inputs[0]);
+    descr.mark_input(4, 5);
+    assert_eq!(0x50020, descr.inputs[0]);
+  }
 }
