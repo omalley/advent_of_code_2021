@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, Error, ErrorKind};
@@ -51,6 +52,7 @@ impl Operand {
 
 #[derive(Debug)]
 enum Operation {
+  // the index and the set register
   Input(usize, Register),
   Add(Register, Operand),
   Multiply(Register, Operand),
@@ -162,6 +164,37 @@ impl InputDescriptor {
       *val = (*val & !mask) | (value << (input_idx * 4)) as u64;
     }
   }
+
+  fn num_to_string(x: u64) -> String {
+    let mut result = String::new();
+    result.push_str("[");
+    let mut num = x;
+    let mut idx = 0;
+    while num != 0 {
+      let digit = num & 0xf;
+      if digit != 0 {
+        if result.len() != 1 {
+          result.push_str(", ");
+        }
+        result.push_str(&format!("{}: {}", idx, digit));
+      }
+      idx += 1;
+      num = num >> 4;
+    }
+    result.push_str("]");
+    result
+  }
+}
+
+impl Display for InputDescriptor {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let mut nums = self.inputs.clone();
+    nums.sort();
+    let result = nums.iter()
+      .map(|s| InputDescriptor::num_to_string(*s))
+      .collect::<Vec<String>>().join(", ");
+    write!(f, "{}", result)
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -183,7 +216,7 @@ mod tests {
 
   #[test]
   fn test_mini_execution() {
-    let mut text = vec!{
+    let text = vec!{
       "inp w",
       "add z w",
       "mod z 2",
@@ -216,10 +249,10 @@ mod tests {
   fn test_input_descriptor() {
     let mut descr = InputDescriptor::init(1, 2);
     assert_eq!(1, descr.inputs.len());
-    assert_eq!(0x20, descr.inputs[0]);
+    assert_eq!("[1: 2]", descr.to_string());
     descr.mark_input(4, 3);
-    assert_eq!(0x30020, descr.inputs[0]);
+    assert_eq!("[1: 2, 4: 3]", descr.to_string());
     descr.mark_input(4, 5);
-    assert_eq!(0x50020, descr.inputs[0]);
+    assert_eq!("[1: 2, 4: 5]", descr.to_string());
   }
 }
