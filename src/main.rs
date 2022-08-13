@@ -174,7 +174,17 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::InputDescriptor;
+  use crate::{InputDescriptor, Operation, State};
+
+  #[test]
+  fn test_execution() {
+    let program = Operation::parse_file("input24.txt").unwrap();
+    let input = vec![3,9,9,9,9,6,9,8,7,9,9,4,2,9];
+    let mut state = State::default();
+    state.evaluate(&program, &input);
+    assert_eq!(9, state.register[0]);
+    assert_eq!(0, state.register[3]);
+  }
 
   #[test]
   fn test_input_descriptor() {
