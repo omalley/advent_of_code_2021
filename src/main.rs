@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::io::{BufRead, Error};
 
@@ -17,6 +18,16 @@ impl Register {
       "y" => Ok(Self::Y),
       "z" => Ok(Self::Z),
       _ => Err(format!("Unknown register {}", line)),
+    }
+  }
+
+  const SIZE: usize = 4;
+  fn index(&self) -> usize {
+    match self {
+      Self::W => 0,
+      Self::X => 1,
+      Self::Y => 2,
+      Self::Z => 3,
     }
   }
 }
@@ -78,32 +89,14 @@ impl Operation {
 
 #[derive(Clone, Debug, Default)]
 struct State {
-  w: i64,
-  x: i64,
-  y: i64,
-  z: i64,
+  register: [i64; Register::SIZE],
 }
 
 impl State {
-  fn get_ref(&mut self, reg: &Register) -> &mut i64 {
-    match reg {
-      Register::W => &mut self.w,
-      Register::X => &mut self.x,
-      Register::Y => &mut self.y,
-      Register::Z => &mut self.z,
-    }
-  }
-
   fn get_value(&self, op: &Operand) -> i64 {
     match op {
       Operand::Value(i) => *i,
-      Operand::Register(reg) =>
-        match reg {
-          Register::W => self.w,
-          Register::X => self.x,
-          Register::Y => self.y,
-          Register::Z => self.z,
-        }
+      Operand::Register(reg) => self.register[reg.index()],
     }
   }
 
@@ -111,32 +104,41 @@ impl State {
   // Updates the state.
   fn evaluate(&mut self, program: &[Operation], input: &[i64]) -> i64 {
     if program.len() == 0 {
-      self.z
+      self.register[Register::SIZE - 1]
     } else {
       match &program[0] {
         Operation::Input(id, reg) =>
-          *self.get_ref(reg) = input[*id],
+          self.register[reg.index()] = input[*id],
         Operation::Add(reg, operand) =>
-          *self.get_ref(reg) = *self.get_ref(reg) + self.get_value(operand),
+          self.register[reg.index()] = self.register[reg.index()] + self.get_value(operand),
         Operation::Multiply(reg, operand) =>
-          *self.get_ref(reg) = *self.get_ref(reg) * self.get_value(operand),
+          self.register[reg.index()] = self.register[reg.index()] * self.get_value(operand),
         Operation::Divide(reg, operand) =>
-          *self.get_ref(reg) = *self.get_ref(reg) / self.get_value(operand),
+          self.register[reg.index()] = self.register[reg.index()] / self.get_value(operand),
         Operation::Modulo(reg, operand) =>
-          *self.get_ref(reg) = *self.get_ref(reg) % self.get_value(operand),
+          self.register[reg.index()] = self.register[reg.index()] % self.get_value(operand),
         Operation::Equal(reg, operand) =>
-          *self.get_ref(reg) =
-              if *self.get_ref(reg) == self.get_value(operand) {1} else {0},
+          self.register[reg.index()] =
+              if self.register[reg.index()] == self.get_value(operand) {1} else {0},
       }
       self.evaluate(&program[1..], input)
     }
   }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PotentialValue {
-  value: i64,
+#[derive(Clone, Debug)]
+struct InputDescriptor {
   inputs: Vec<u64>,
+}
+
+impl InputDescriptor {
+  fn add_input_value(&mut self, position: usize, value: i64) {
+
+  }
+}
+#[derive(Clone, Debug)]
+struct SymbolicState {
+  registers: [HashMap<i64, InputDescriptor>; Register::SIZE],
 }
 
 fn main() {
