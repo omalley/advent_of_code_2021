@@ -216,40 +216,66 @@ impl Display for InputDescriptor {
   }
 }
 
+#[derive(Clone, Debug, Default)]
+struct SymbolicValue {
+  values: HashMap<i64, InputDescriptor>,
+}
+
+impl SymbolicValue {
+  fn literal(x: i64) -> Self {
+    SymbolicValue{values: [(x, InputDescriptor::default())].iter().cloned().collect()}
+  }
+
+  fn values(&self) -> Vec<i64> {
+    let mut result = self.values.keys().cloned().collect::<Vec<i64>>();
+    result.sort();
+    result
+  }
+}
+
 #[derive(Clone, Debug)]
 struct SymbolicState {
-  register: [HashMap<i64, InputDescriptor>; Register::SIZE],
+  register: [SymbolicValue; Register::SIZE],
 }
 
 impl SymbolicState {
-
-  fn literal(x: i64) -> HashMap<i64, InputDescriptor> {
-    [(x, InputDescriptor::default())].iter().cloned().collect()
+  fn get_value(&self, opd: &Operand) -> SymbolicValue {
+    match opd {
+      Operand::Register(reg) => self.register[reg.index()].clone(),
+      Operand::Value(x) => SymbolicValue::literal(*x),
+    }
   }
 
   /// Generate all possible values for an input statement
-  fn do_input(idx: usize) -> HashMap<i64, InputDescriptor> {
-    (1 .. 10).map(|v| (v, InputDescriptor::init(idx, v))).collect()
+  fn do_input(idx: usize) -> SymbolicValue {
+    // generate all values from 1 to 9
+    SymbolicValue{values: (1 .. 10)
+      .map(|v| (v, InputDescriptor::init(idx, v)))
+      .collect()}
   }
 
-  fn do_add(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
-    HashMap::new()
+  fn do_add(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+    let left = &self.register[reg.index()];
+    let right = self.get_value(opd);
+    let mut result = SymbolicValue::default();
+    
+    result
   }
 
-  fn do_multiply(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
-    HashMap::new()
+  fn do_multiply(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+    SymbolicValue::default()
   }
 
-  fn do_divide(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
-    HashMap::new()
+  fn do_divide(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+    SymbolicValue::default()
   }
 
-  fn do_modulo(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
-    HashMap::new()
+  fn do_modulo(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+    SymbolicValue::default()
   }
 
-  fn do_equals(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
-    HashMap::new()
+  fn do_equals(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+    SymbolicValue::default()
   }
 
   // Evaluate the operation in the given state and input.
@@ -290,7 +316,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{InputAlternative, InputDescriptor, Operation, State, SymbolicState};
+  use crate::{InputAlternative, Operation, State, SymbolicState, SymbolicValue};
 
   #[test]
   fn test_mini_execution() {
@@ -336,7 +362,7 @@ mod tests {
 
   #[test]
   fn test_symbolic() {
-    let result = SymbolicState::literal(12);
+    let result = SymbolicValue::literal(12);
     let mut keys = result.keys().cloned().collect::<Vec<i64>>();
     keys.sort();
     assert_eq!(vec!{12}, keys);
