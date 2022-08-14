@@ -147,51 +147,72 @@ impl State {
   }
 }
 
-#[derive(Clone, Debug, Default)]
-struct InputDescriptor {
-  inputs: Vec<u64>,
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct InputAlternative {
+  input: u64,
 }
 
-impl InputDescriptor {
+impl InputAlternative {
   fn init(input_idx: usize, value: i64) -> Self {
-    let inputs = vec!{(value << (input_idx * 4)) as u64};
-    InputDescriptor{inputs}
+    assert!(value > 0 && value < 10);
+    InputAlternative{input: (value << (input_idx * 4)) as u64}
   }
 
-  fn mark_input(&mut self, input_idx: usize, value: i64) {
-    for val in self.inputs.iter_mut() {
-      let mask = 0xf << (input_idx * 4);
-      *val = (*val & !mask) | (value << (input_idx * 4)) as u64;
+  fn and(&self, other: &Self) -> Option<Self> {
+    // Check for conflicts
+    let mut left = self.input;
+    let mut right = other.input;
+    while left != 0 && right != 0 {
+      let left_digit = left & 0xf;
+      let right_digit = right & 0xf;
+      if left_digit != 0 && right_digit != 0 && left_digit != right_digit {
+        return None
+      }
+      left = left >> 4;
+      right = right >> 4;
     }
+    Some(InputAlternative{input: self.input | other.input})
   }
+}
 
-  fn num_to_string(x: u64) -> String {
-    let mut result = String::new();
-    result.push_str("[");
-    let mut num = x;
-    let mut idx = 0;
+impl Display for InputAlternative {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let mut result: Vec<String> = Vec::new();
+    let mut num = self.input;
+    let mut input_idx = 0;
     while num != 0 {
       let digit = num & 0xf;
       if digit != 0 {
-        if result.len() != 1 {
-          result.push_str(", ");
-        }
-        result.push_str(&format!("{}: {}", idx, digit));
+        result.push(format!("{}: {}", input_idx, digit));
       }
-      idx += 1;
+      input_idx += 1;
       num = num >> 4;
     }
-    result.push_str("]");
-    result
+    write!(f, "{{{}}}", result.join(", "))
+  }
+}
+
+#[derive(Clone, Debug)]
+struct InputDescriptor {
+  alternatives: Vec<InputAlternative>,
+}
+
+impl InputDescriptor {
+  fn default() -> Self {
+    InputDescriptor{alternatives: vec!{InputAlternative::default()}}
+  }
+
+  fn init(input_idx: usize, value: i64) -> Self {
+    InputDescriptor{alternatives: vec!{InputAlternative::init(input_idx, value)}}
   }
 }
 
 impl Display for InputDescriptor {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let result = self.inputs.iter()
-      .map(|s| InputDescriptor::num_to_string(*s))
-      .collect::<Vec<String>>().join(", ");
-    write!(f, "{}", result)
+    let result = self.alternatives.iter()
+      .map(|s| s.to_string())
+      .collect::<Vec<String>>();
+    write!(f, "{{ {} }}", result.join(", "))
   }
 }
 
@@ -201,6 +222,11 @@ struct SymbolicState {
 }
 
 impl SymbolicState {
+
+  fn literal(x: i64) -> HashMap<i64, InputDescriptor> {
+    [(x, InputDescriptor::default())].iter().cloned().collect()
+  }
+
   /// Generate all possible values for an input statement
   fn do_input(idx: usize) -> HashMap<i64, InputDescriptor> {
     (1 .. 10).map(|v| (v, InputDescriptor::init(idx, v))).collect()
@@ -213,12 +239,15 @@ impl SymbolicState {
   fn do_multiply(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
     HashMap::new()
   }
+
   fn do_divide(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
     HashMap::new()
   }
+
   fn do_modulo(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
     HashMap::new()
   }
+
   fn do_equals(&self, reg: &Register, opd: &Operand) -> HashMap<i64, InputDescriptor> {
     HashMap::new()
   }
@@ -261,7 +290,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{InputDescriptor, Operation, State};
+  use crate::{InputAlternative, InputDescriptor, Operation, State, SymbolicState};
 
   #[test]
   fn test_mini_execution() {
@@ -295,13 +324,25 @@ mod tests {
   }
 
   #[test]
-  fn test_input_descriptor() {
-    let mut descr = InputDescriptor::init(1, 2);
-    assert_eq!(1, descr.inputs.len());
-    assert_eq!("[1: 2]", descr.to_string());
-    descr.mark_input(4, 3);
-    assert_eq!("[1: 2, 4: 3]", descr.to_string());
-    descr.mark_input(4, 5);
-    assert_eq!("[1: 2, 4: 5]", descr.to_string());
+  fn test_input_alternative() {
+    let descr = InputAlternative::init(1, 2);
+    assert_eq!("{1: 2}", descr.to_string());
+    let result = InputAlternative::init(4, 3)
+      .and(&descr).unwrap();
+    assert_eq!("{1: 2, 4: 3}", result.to_string());
+    let result = InputAlternative::init(4, 5).and(&result);
+    assert_eq!(None, result);
+  }
+
+  #[test]
+  fn test_symbolic() {
+    let result = SymbolicState::literal(12);
+    let mut keys = result.keys().cloned().collect::<Vec<i64>>();
+    keys.sort();
+    assert_eq!(vec!{12}, keys);
+    let result = SymbolicState::do_input(3);
+    keys = result.keys().cloned().collect::<Vec<i64>>();
+    keys.sort();
+    assert_eq!((1..10).collect::<Vec<i64>>(), keys);
   }
 }
