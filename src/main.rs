@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, Error, ErrorKind};
+use bitvec::vec::BitVec;
 
 #[derive (Debug)]
 enum Register {
@@ -147,72 +148,48 @@ impl State {
   }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct InputAlternative {
-  input: u64,
-}
-
-impl InputAlternative {
-  fn init(input_idx: usize, value: i64) -> Self {
-    assert!(value > 0 && value < 10);
-    InputAlternative{input: (value << (input_idx * 4)) as u64}
-  }
-
-  fn and(&self, other: &Self) -> Option<Self> {
-    // Check for conflicts
-    let mut left = self.input;
-    let mut right = other.input;
-    while left != 0 && right != 0 {
-      let left_digit = left & 0xf;
-      let right_digit = right & 0xf;
-      if left_digit != 0 && right_digit != 0 && left_digit != right_digit {
-        return None
-      }
-      left = left >> 4;
-      right = right >> 4;
-    }
-    Some(InputAlternative{input: self.input | other.input})
-  }
-}
-
-impl Display for InputAlternative {
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let mut result: Vec<String> = Vec::new();
-    let mut num = self.input;
-    let mut input_idx = 0;
-    while num != 0 {
-      let digit = num & 0xf;
-      if digit != 0 {
-        result.push(format!("{}: {}", input_idx, digit));
-      }
-      input_idx += 1;
-      num = num >> 4;
-    }
-    write!(f, "{{{}}}", result.join(", "))
-  }
-}
-
 #[derive(Clone, Debug)]
 struct InputDescriptor {
-  alternatives: Vec<InputAlternative>,
+  /// Which of the inputs led to the corresponding value.
+  /// posn = input_idx * INPUT_VALUES + value - 1
+  inputs: BitVec,
 }
 
 impl InputDescriptor {
-  fn default() -> Self {
-    InputDescriptor{alternatives: vec!{InputAlternative::default()}}
+  /// The number of potential values for each input.
+  const INPUT_VALUES: usize = 9;
+
+  fn init(num_inputs: usize) -> Self {
+    InputDescriptor{inputs: BitVec::repeat(false, num_inputs * Self::INPUT_VALUES)}
   }
 
-  fn init(input_idx: usize, value: i64) -> Self {
-    InputDescriptor{alternatives: vec!{InputAlternative::init(input_idx, value)}}
+  fn set(&mut self, input_idx: usize, value: i64) {
+    assert!(value > 0 && value < 10);
+    self.inputs.set(input_idx * Self::INPUT_VALUES + value as usize - 1, true);
+  }
+
+  fn or(&mut self, other: &Self) {
+    self.inputs |= &other.inputs;
   }
 }
 
 impl Display for InputDescriptor {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let result = self.alternatives.iter()
-      .map(|s| s.to_string())
-      .collect::<Vec<String>>();
-    write!(f, "{{ {} }}", result.join(", "))
+    let parts: Vec<String> =
+      (0 .. self.inputs.len() / InputDescriptor::INPUT_VALUES)
+        .filter_map(|inp| {
+          let slice = &self.inputs[inp * InputDescriptor::INPUT_VALUES..
+            (inp + 1) * InputDescriptor::INPUT_VALUES];
+          if slice.not_any() {
+            None
+          } else {
+            Some(format!("in_{}: {}", inp,
+                         slice.iter().enumerate().filter(|(v,i)| **i)
+              .map(|(v,i) | (v+1).to_string())
+                           .collect::<Vec<String>>().join(", ")))
+          }
+        }).collect();
+    write!(f, "{{ {} }}", parts.join(", "))
   }
 }
 
@@ -258,7 +235,7 @@ impl SymbolicState {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
-    
+
     result
   }
 
@@ -316,7 +293,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{InputAlternative, Operation, State, SymbolicState, SymbolicValue};
+  use crate::{Operation, State, SymbolicState, SymbolicValue};
 
   #[test]
   fn test_mini_execution() {
