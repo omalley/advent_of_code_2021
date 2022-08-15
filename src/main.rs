@@ -286,16 +286,27 @@ impl SymbolicState {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
-    for (left_val, left_descr) in &left.values {
-      for (right_val, right_descr) in &right.values {
+    for (&left_val, left_descr) in &left.values {
+      for (&right_val, right_descr) in &right.values {
+        let mut total_descr = InputDescriptor::init(self.num_inputs);
+        if left_val != 0 {
+          total_descr.or(right_descr);
+        }
+        if right_val != 0 {
+          total_descr.or(left_descr);
+        } else if left_val == 0 {
+          if left_descr.inputs.count_ones() > right_descr.inputs.count_ones() {
+            total_descr.or(right_descr);
+          } else {
+            total_descr.or(left_descr);
+          }
+        }
         let total_val = left_val * right_val;
         match result.values.get_mut(&total_val) {
-          Some(total_descr) => {
-            total_descr.or(&left_descr).or(&right_descr);
+          Some(old_descr) => {
+            old_descr.or(&total_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.num_inputs);
-            total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
@@ -410,7 +421,7 @@ mod tests {
   use crate::{count_inputs, InputDescriptor, Operand, Operation, Register, State, SymbolicState};
 
   #[test]
-  fn test_mini_execution() {
+  fn test_little_execution() {
     let text = vec!{
       "inp w",
       "add z w",
@@ -472,8 +483,7 @@ mod tests {
     let num_inputs =  count_inputs(&program);
     let mut state = SymbolicState::init(num_inputs);
     state.evaluate(&program);
-    for sv in &state.register {
-      println!("sv = {}", sv);
-    }
+    assert_eq!("in_0: {8, 9}", state.register[0].values.get(&1).unwrap().to_string());
+    assert_eq!("in_0: {1, 3, 5, 7, 9}", state.register[3].values.get(&1).unwrap().to_string());
   }
 }
