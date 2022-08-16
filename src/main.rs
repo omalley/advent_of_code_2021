@@ -138,10 +138,6 @@ impl Display for Operation {
   }
 }
 
-fn count_inputs(program: &[Operation]) -> usize {
-  program.iter().filter(|op| matches!(op, Operation::Input(_, _))).count()
-}
-
 fn find_equals(program: &[Operation]) -> Vec<usize> {
   program.iter().enumerate().filter(|(_, op)| matches!(op, Operation::Equal(_, _)))
     .map(|(i, _) | i)
@@ -289,7 +285,7 @@ impl SymbolicState {
   }
 
   /// Generate all possible values for an input statement
-  fn do_input(&self, idx: usize) -> SymbolicValue {
+  fn do_input(&self) -> SymbolicValue {
     // generate all values from 1 to 9
     SymbolicValue{values: (1 .. 10)
         .map(|v| (v, InputDescriptor::init(self.equals_posn.len())))
@@ -426,8 +422,8 @@ impl SymbolicState {
   fn evaluate(&mut self, program: &[Operation]) {
     if program.len() > 0 {
       match &program[0] {
-        Operation::Input(id, reg) =>
-          self.register[reg.index()] = self.do_input(*id),
+        Operation::Input(_, reg) =>
+          self.register[reg.index()] = self.do_input(),
         Operation::Add(reg, operand) =>
           self.register[reg.index()] = self.do_add(reg, operand),
         Operation::Multiply(reg, operand) =>
@@ -465,7 +461,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{count_inputs, InputDescriptor, Operand, Operation, Register, State, SymbolicState};
+  use crate::{InputDescriptor, Operand, Operation, Register, State, SymbolicState};
 
   #[test]
   fn test_little_execution() {
@@ -515,8 +511,8 @@ mod tests {
   #[test]
   fn test_symbolic() {
     let mut state = SymbolicState::init(&Vec::new());
-    state.register[0] = state.do_input(0);
-    state.register[1] = state.do_input(1);
+    state.register[0] = state.do_input();
+    state.register[1] = state.do_input();
     state.register[2] = state.do_add(&Register::W, &Operand::Register(Register::X));
     for sv in &state.register {
       println!("sv = {}", sv);
@@ -527,7 +523,6 @@ mod tests {
   #[test]
   fn test_symbolic_little() {
     let program = Operation::parse_file("little.txt").unwrap();
-    let num_inputs =  count_inputs(&program);
     let mut state = SymbolicState::init(&Vec::new());
     state.evaluate(&program);
     assert_eq!(vec![0, 1], state.register[0].values());
