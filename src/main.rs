@@ -137,8 +137,15 @@ impl Display for Operation {
     }
   }
 }
+
 fn count_inputs(program: &[Operation]) -> usize {
   program.iter().filter(|op| matches!(op, Operation::Input(_, _))).count()
+}
+
+fn find_equals(program: &[Operation]) -> Vec<usize> {
+  program.iter().enumerate().filter(|(_, op)| matches!(op, Operation::Equal(_, _)))
+    .map(|(i, _) | i)
+    .collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -187,22 +194,22 @@ impl State {
 
 #[derive(Clone, Debug)]
 struct InputDescriptor {
-  /// Which of the inputs led to the corresponding value.
-  /// posn = input_idx * INPUT_VALUES + value - 1
+  /// The output of each equal operand
+  /// posn = equal_idx * INPUT_VALUES + value
   inputs: BitVec,
 }
 
 impl InputDescriptor {
   /// The number of potential values for each input.
-  const INPUT_VALUES: usize = 9;
+  const INPUT_VALUES: usize = 2;
 
-  fn init(num_inputs: usize) -> Self {
-    InputDescriptor{inputs: BitVec::repeat(false, num_inputs * Self::INPUT_VALUES)}
+  fn init(num_equals: usize) -> Self {
+    InputDescriptor{inputs: BitVec::repeat(false, num_equals * Self::INPUT_VALUES)}
   }
 
-  fn set(&mut self, input_idx: usize, value: i64) {
-    assert!(value > 0 && value < 10);
-    self.inputs.set(input_idx * Self::INPUT_VALUES + value as usize - 1, true);
+  fn set(&mut self, equal_idx: usize, value: i64) {
+    assert!(value >= 0 && value < Self::INPUT_VALUES as i64);
+    self.inputs.set(equal_idx * Self::INPUT_VALUES + value as usize, true);
   }
 
   fn or(&mut self, other: &Self) -> &mut Self {
@@ -215,15 +222,15 @@ impl Display for InputDescriptor {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let parts: Vec<String> =
       (0 .. self.inputs.len() / InputDescriptor::INPUT_VALUES)
-        .filter_map(|inp| {
-          let slice = &self.inputs[inp * InputDescriptor::INPUT_VALUES..
-            (inp + 1) * InputDescriptor::INPUT_VALUES];
+        .filter_map(|eql| {
+          let slice = &self.inputs[eql * InputDescriptor::INPUT_VALUES..
+            (eql + 1) * InputDescriptor::INPUT_VALUES];
           if slice.not_any() {
             None
           } else {
-            Some(format!("in_{}: {{{}}}", inp,
+            Some(format!("eql_{}: {{{}}}", eql,
                          slice.iter().enumerate().filter(|(_, i)| **i)
-              .map(|(v, _) | (v+1).to_string())
+              .map(|(v, _) | v.to_string())
                            .collect::<Vec<String>>().join(", ")))
           }
         }).collect();
@@ -237,8 +244,8 @@ struct SymbolicValue {
 }
 
 impl SymbolicValue {
-  fn literal(num_inputs: usize, x: i64) -> Self {
-    SymbolicValue{values: [(x, InputDescriptor::init(num_inputs))].iter().cloned().collect()}
+  fn literal(num_equals: usize, x: i64) -> Self {
+    SymbolicValue{values: [(x, InputDescriptor::init(num_equals))].iter().cloned().collect()}
   }
 
   fn values(&self) -> Vec<i64> {
@@ -259,16 +266,17 @@ impl Display for SymbolicValue {
 
 #[derive(Clone, Debug, Default)]
 struct SymbolicState {
-  num_inputs: usize,
+  equals_posn: Vec<usize>,
+  pc: usize,
   register: [SymbolicValue; Register::SIZE],
 }
 
 impl SymbolicState {
-  fn init(num_inputs: usize) -> Self {
+  fn init(equals_posn: &[usize]) -> Self {
     let mut result = Self::default();
-    result.num_inputs = num_inputs;
+    result.equals_posn = equals_posn.into();
     for sv in result.register.iter_mut() {
-      *sv = SymbolicValue::literal(num_inputs, 0);
+      *sv = SymbolicValue::literal(equals_posn.len(), 0);
     }
     result
   }
@@ -276,7 +284,7 @@ impl SymbolicState {
   fn get_value(&self, opd: &Operand) -> SymbolicValue {
     match opd {
       Operand::Register(reg) => self.register[reg.index()].clone(),
-      Operand::Value(x) => SymbolicValue::literal(self.num_inputs, *x),
+      Operand::Value(x) => SymbolicValue::literal(self.equals_posn.len(), *x),
     }
   }
 
@@ -284,11 +292,7 @@ impl SymbolicState {
   fn do_input(&self, idx: usize) -> SymbolicValue {
     // generate all values from 1 to 9
     SymbolicValue{values: (1 .. 10)
-        .map(|v| {
-          let mut desc = InputDescriptor::init(self.num_inputs);
-          desc.set(idx, v);
-          (v, desc)
-        })
+        .map(|v| (v, InputDescriptor::init(self.equals_posn.len())))
         .collect()}
   }
 
@@ -304,7 +308,7 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.num_inputs);
+            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
@@ -320,7 +324,7 @@ impl SymbolicState {
     let mut result = SymbolicValue::default();
     for (&left_val, left_descr) in &left.values {
       for (&right_val, right_descr) in &right.values {
-        let mut total_descr = InputDescriptor::init(self.num_inputs);
+        let mut total_descr = InputDescriptor::init(self.equals_posn.len());
         if left_val != 0 {
           total_descr.or(right_descr);
         }
@@ -344,11 +348,6 @@ impl SymbolicState {
         }
       }
     }
-    if result.values.len() == 1 {
-      for (&v, id) in result.values.iter_mut() {
-        id.inputs.fill(false);
-      }
-    }
     result
   }
 
@@ -364,16 +363,11 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.num_inputs);
+            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
-      }
-    }
-    if result.values.len() == 1 {
-      for (&v, id) in result.values.iter_mut() {
-        id.inputs.fill(false);
       }
     }
     result
@@ -391,7 +385,7 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.num_inputs);
+            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
@@ -413,17 +407,16 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.num_inputs);
+            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
       }
     }
-    if result.values.len() == 1 {
-      for (&v, id) in result.values.iter_mut() {
-        id.inputs.fill(false);
-      }
+    let eq_idx = self.equals_posn.iter().position(|&x| x == self.pc).unwrap();
+    for (&val, descr) in result.values.iter_mut() {
+      descr.set(eq_idx, val);
     }
     result
   }
@@ -446,11 +439,14 @@ impl SymbolicState {
         Operation::Equal(reg, operand) =>
           self.register[reg.index()] = self.do_equals(reg, operand),
       }
+      /*
       println!("-------------------");
       println!("op {}", program[0]);
       for sv in &self.register {
         println!("sv = {}", sv);
       }
+       */
+      self.pc += 1;
       self.evaluate(&program[1..])
     }
   }
@@ -458,14 +454,13 @@ impl SymbolicState {
 
 fn main() {
   let program = Operation::parse_file("input24.txt").unwrap();
-  let num_inputs =  count_inputs(&program);
-  let mut state = SymbolicState::init(num_inputs);
+  let equals_posn =  find_equals(&program);
+  let mut state = SymbolicState::init(&equals_posn);
   state.evaluate(&program);
   match state.register[Register::Z.index()].values.get(&0) {
     Some(sol) => println!("Solution = {}", sol),
     None => println!("Nothing!"),
   }
-
 }
 
 #[cfg(test)]
@@ -506,20 +501,20 @@ mod tests {
   #[test]
   fn test_input_alternative() {
     let mut descr = InputDescriptor::init(14);
-    descr.set(1, 2);
-    assert_eq!("in_1: {2}", descr.to_string());
-    descr.set(1, 5);
-    descr.set(4, 3);
-    assert_eq!("in_1: {2, 5}; in_4: {3}", descr.to_string());
+    descr.set(1, 0);
+    assert_eq!("eql_1: {0}", descr.to_string());
+    descr.set(1, 1);
+    descr.set(4, 1);
+    assert_eq!("eql_1: {0, 1}; eql_4: {1}", descr.to_string());
     let mut descr2 = InputDescriptor::init(14);
-    descr2.set(1, 3);
+    descr2.set(2, 1);
     descr.or(&descr2);
-    assert_eq!("in_1: {2, 3, 5}; in_4: {3}", descr.to_string());
+    assert_eq!("eql_1: {0, 1}; eql_2: {1}; eql_4: {1}", descr.to_string());
   }
 
   #[test]
   fn test_symbolic() {
-    let mut state = SymbolicState::init(14);
+    let mut state = SymbolicState::init(&Vec::new());
     state.register[0] = state.do_input(0);
     state.register[1] = state.do_input(1);
     state.register[2] = state.do_add(&Register::W, &Operand::Register(Register::X));
@@ -533,9 +528,9 @@ mod tests {
   fn test_symbolic_little() {
     let program = Operation::parse_file("little.txt").unwrap();
     let num_inputs =  count_inputs(&program);
-    let mut state = SymbolicState::init(num_inputs);
+    let mut state = SymbolicState::init(&Vec::new());
     state.evaluate(&program);
-    assert_eq!("in_0: {8, 9}", state.register[0].values.get(&1).unwrap().to_string());
-    assert_eq!("in_0: {1, 3, 5, 7, 9}", state.register[3].values.get(&1).unwrap().to_string());
+    assert_eq!(vec![0, 1], state.register[0].values());
+    assert_eq!(vec![0, 1], state.register[3].values());
   }
 }
