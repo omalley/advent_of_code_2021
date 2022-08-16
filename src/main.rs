@@ -36,6 +36,17 @@ impl Register {
   }
 }
 
+impl Display for Register {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Register::W => write!(f, "W"),
+      Register::X => write!(f, "X"),
+      Register::Y => write!(f, "Y"),
+      Register::Z => write!(f, "Z"),
+    }
+  }
+}
+
 #[derive(Debug)]
 enum Operand {
   Value(i64),
@@ -48,6 +59,15 @@ impl Operand {
       Ok(Self::Value(val))
     } else {
       Ok(Self::Register(Register::parse(line)?))
+    }
+  }
+}
+
+impl Display for Operand {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Operand::Value(v) => write!(f, "{}", v),
+      Operand::Register(r) => write!(f, "{}", r),
     }
   }
 }
@@ -105,6 +125,18 @@ impl Operation {
   }
 }
 
+impl Display for Operation {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Operation::Input(idx, reg) => write!(f, "inp({}, {})", idx, reg),
+      Operation::Add(left, right) => write!(f, "add({}, {})", left, right),
+      Operation::Multiply(left, right) => write!(f, "mul({}, {})", left, right),
+      Operation::Divide(left, right) => write!(f, "div({}, {})", left, right),
+      Operation::Modulo(left, right) => write!(f, "mod({}, {})", left, right),
+      Operation::Equal(left, right) => write!(f, "eql({}, {})", left, right),
+    }
+  }
+}
 fn count_inputs(program: &[Operation]) -> usize {
   program.iter().filter(|op| matches!(op, Operation::Input(_, _))).count()
 }
@@ -312,6 +344,11 @@ impl SymbolicState {
         }
       }
     }
+    if result.values.len() == 1 {
+      for (&v, id) in result.values.iter_mut() {
+        id.inputs.fill(false);
+      }
+    }
     result
   }
 
@@ -332,6 +369,11 @@ impl SymbolicState {
             result.values.insert(total_val, total_descr);
           },
         }
+      }
+    }
+    if result.values.len() == 1 {
+      for (&v, id) in result.values.iter_mut() {
+        id.inputs.fill(false);
       }
     }
     result
@@ -378,6 +420,11 @@ impl SymbolicState {
         }
       }
     }
+    if result.values.len() == 1 {
+      for (&v, id) in result.values.iter_mut() {
+        id.inputs.fill(false);
+      }
+    }
     result
   }
 
@@ -398,6 +445,11 @@ impl SymbolicState {
           self.register[reg.index()] = self.do_modulo(reg, operand),
         Operation::Equal(reg, operand) =>
           self.register[reg.index()] = self.do_equals(reg, operand),
+      }
+      println!("-------------------");
+      println!("op {}", program[0]);
+      for sv in &self.register {
+        println!("sv = {}", sv);
       }
       self.evaluate(&program[1..])
     }
