@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, Error, ErrorKind};
+use std::rc::Rc;
 
 use bitvec::vec::BitVec;
 
@@ -188,60 +189,88 @@ impl State {
   }
 }
 
+/// Tracking information for each value.
+/// We keep track of whether each equals op-code evaluated to true or false
 #[derive(Clone, Debug)]
-struct InputDescriptor {
+struct BreadCrumb {
   /// The output of each equal operand
   /// posn = equal_idx * INPUT_VALUES + value
-  inputs: BitVec,
+  /// If the option is None, it means that no bits are set.
+  crumbs: Option<BitVec>,
+  num_variables: usize,
 }
 
-impl InputDescriptor {
+impl BreadCrumb {
   /// The number of potential values for each input.
   const INPUT_VALUES: usize = 2;
 
-  fn init(num_equals: usize) -> Self {
-    InputDescriptor{inputs: BitVec::repeat(false, num_equals * Self::INPUT_VALUES)}
+  fn init(num_variables: usize) -> Self {
+    BreadCrumb{crumbs: None, num_variables}
   }
 
   fn set(&mut self, equal_idx: usize, value: i64) {
     assert!(value >= 0 && value < Self::INPUT_VALUES as i64);
-    self.inputs.set(equal_idx * Self::INPUT_VALUES + value as usize, true);
+    if self.crumbs.is_none() {
+      self.crumbs = Some(BitVec::repeat(false, self.num_variables * Self::INPUT_VALUES));
+    }
+    let vec: &mut BitVec = self.crumbs.as_mut().unwrap();
+    vec.set(equal_idx * Self::INPUT_VALUES + value as usize, true);
   }
 
   fn or(&mut self, other: &Self) -> &mut Self {
-    self.inputs |= &other.inputs;
+    if let Some(other_crumbs) = &other.crumbs {
+      if let Some(crumbs) = &mut self.crumbs {
+        *crumbs |= other_crumbs;
+      } else {
+        self.crumbs = Some(other_crumbs.clone());
+      }
+    }
     self
+  }
+
+  fn count_ones(&self) -> usize {
+    match &self.crumbs {
+      None => 0,
+      Some(c) => c.count_ones(),
+    }
   }
 }
 
-impl Display for InputDescriptor {
+impl Display for BreadCrumb {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let parts: Vec<String> =
-      (0 .. self.inputs.len() / InputDescriptor::INPUT_VALUES)
-        .filter_map(|eql| {
-          let slice = &self.inputs[eql * InputDescriptor::INPUT_VALUES..
-            (eql + 1) * InputDescriptor::INPUT_VALUES];
-          if slice.not_any() {
-            None
-          } else {
-            Some(format!("eql_{}: {{{}}}", eql,
-                         slice.iter().enumerate().filter(|(_, i)| **i)
-              .map(|(v, _) | v.to_string())
-                           .collect::<Vec<String>>().join(", ")))
-          }
-        }).collect();
+    let parts: Vec<String>;
+    match &self.crumbs {
+      None => parts = vec![],
+      Some(vec) => {
+        parts = (0 .. self.num_variables)
+          .filter_map(|eql| {
+            let slice = &vec[eql * BreadCrumb::INPUT_VALUES..
+              (eql + 1) * BreadCrumb::INPUT_VALUES];
+            if slice.not_any() {
+              None
+            } else {
+              Some(format!("eql_{}: {{{}}}", eql,
+                           slice.iter().enumerate().filter(|(_, i)| **i)
+                             .map(|(v, _) | v.to_string())
+                             .collect::<Vec<String>>().join(", ")))
+            }
+          }).collect();
+      }
+    }
     write!(f, "{}", parts.join("; "))
   }
 }
 
 #[derive(Clone, Debug, Default)]
 struct SymbolicValue {
-  values: HashMap<i64, InputDescriptor>,
+  values: HashMap<i64, BreadCrumb>,
 }
 
 impl SymbolicValue {
-  fn literal(num_equals: usize, x: i64) -> Self {
-    SymbolicValue{values: [(x, InputDescriptor::init(num_equals))].iter().cloned().collect()}
+  fn literal(num_variables: usize, x: i64) -> Self {
+    let mut values = HashMap::default();
+    values.insert(x, BreadCrumb::init(num_variables));
+    Self{values}
   }
 
   fn values(&self) -> Vec<i64> {
@@ -264,35 +293,38 @@ impl Display for SymbolicValue {
 struct SymbolicState {
   equals_posn: Vec<usize>,
   pc: usize,
-  register: [SymbolicValue; Register::SIZE],
+  register: [Rc<SymbolicValue>; Register::SIZE],
 }
 
 impl SymbolicState {
   fn init(equals_posn: &[usize]) -> Self {
     let mut result = Self::default();
     result.equals_posn = equals_posn.into();
+    let zero = Rc::new(
+      SymbolicValue::literal(equals_posn.len(), 0));
     for sv in result.register.iter_mut() {
-      *sv = SymbolicValue::literal(equals_posn.len(), 0);
+      *sv = zero.clone();
     }
     result
   }
 
-  fn get_value(&self, opd: &Operand) -> SymbolicValue {
+  fn get_value(&self, opd: &Operand) -> Rc<SymbolicValue> {
     match opd {
       Operand::Register(reg) => self.register[reg.index()].clone(),
-      Operand::Value(x) => SymbolicValue::literal(self.equals_posn.len(), *x),
+      Operand::Value(x) => Rc::new(
+        SymbolicValue::literal(self.equals_posn.len(), *x)),
     }
   }
 
   /// Generate all possible values for an input statement
-  fn do_input(&self) -> SymbolicValue {
+  fn do_input(&self) -> Rc<SymbolicValue> {
     // generate all values from 1 to 9
-    SymbolicValue{values: (1 .. 10)
-        .map(|v| (v, InputDescriptor::init(self.equals_posn.len())))
-        .collect()}
+    Rc::new(SymbolicValue{values: (1 ..= 9)
+        .map(|v| (v, BreadCrumb::init(self.equals_posn.len())))
+        .collect()})
   }
 
-  fn do_add(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+  fn do_add(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
@@ -304,30 +336,30 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
+            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
       }
     }
-    result
+    Rc::new(result)
   }
 
-  fn do_multiply(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+  fn do_multiply(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
     for (&left_val, left_descr) in &left.values {
       for (&right_val, right_descr) in &right.values {
-        let mut total_descr = InputDescriptor::init(self.equals_posn.len());
+        let mut total_descr = BreadCrumb::init(self.equals_posn.len());
         if left_val != 0 {
           total_descr.or(right_descr);
         }
         if right_val != 0 {
           total_descr.or(left_descr);
         } else if left_val == 0 {
-          if left_descr.inputs.count_ones() > right_descr.inputs.count_ones() {
+          if left_descr.count_ones() > right_descr.count_ones() {
             total_descr.or(right_descr);
           } else {
             total_descr.or(left_descr);
@@ -344,10 +376,10 @@ impl SymbolicState {
         }
       }
     }
-    result
+    Rc::new(result)
   }
 
-  fn do_divide(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+  fn do_divide(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
@@ -359,17 +391,17 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
+            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
       }
     }
-    result
+    Rc::new(result)
   }
 
-  fn do_modulo(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+  fn do_modulo(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
@@ -381,17 +413,17 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
+            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
         }
       }
     }
-    result
+    Rc::new(result)
   }
 
-  fn do_equals(&self, reg: &Register, opd: &Operand) -> SymbolicValue {
+  fn do_equals(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
@@ -403,7 +435,7 @@ impl SymbolicState {
             total_descr.or(&left_descr).or(&right_descr);
           },
           None => {
-            let mut total_descr = InputDescriptor::init(self.equals_posn.len());
+            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
             total_descr.or(&left_descr).or(&right_descr);
             result.values.insert(total_val, total_descr);
           },
@@ -414,7 +446,7 @@ impl SymbolicState {
     for (&val, descr) in result.values.iter_mut() {
       descr.set(eq_idx, val);
     }
-    result
+    Rc::new(result)
   }
 
   // Evaluate the operation in the given state and input.
@@ -435,13 +467,6 @@ impl SymbolicState {
         Operation::Equal(reg, operand) =>
           self.register[reg.index()] = self.do_equals(reg, operand),
       }
-      /*
-      println!("-------------------");
-      println!("op {}", program[0]);
-      for sv in &self.register {
-        println!("sv = {}", sv);
-      }
-       */
       self.pc += 1;
       self.evaluate(&program[1..])
     }
@@ -461,7 +486,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{InputDescriptor, Operand, Operation, Register, State, SymbolicState};
+  use crate::{BreadCrumb, Operand, Operation, Register, State, SymbolicState};
 
   #[test]
   fn test_little_execution() {
@@ -496,13 +521,13 @@ mod tests {
 
   #[test]
   fn test_input_alternative() {
-    let mut descr = InputDescriptor::init(14);
+    let mut descr = BreadCrumb::init(14);
     descr.set(1, 0);
     assert_eq!("eql_1: {0}", descr.to_string());
     descr.set(1, 1);
     descr.set(4, 1);
     assert_eq!("eql_1: {0, 1}; eql_4: {1}", descr.to_string());
-    let mut descr2 = InputDescriptor::init(14);
+    let mut descr2 = BreadCrumb::init(14);
     descr2.set(2, 1);
     descr.or(&descr2);
     assert_eq!("eql_1: {0, 1}; eql_2: {1}; eql_4: {1}", descr.to_string());
