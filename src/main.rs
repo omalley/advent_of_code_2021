@@ -5,8 +5,6 @@ use std::io;
 use std::io::{BufRead, Error, ErrorKind};
 use std::rc::Rc;
 
-use bitvec::vec::BitVec;
-
 #[derive (Debug)]
 enum Register {
   W,
@@ -189,74 +187,112 @@ impl State {
   }
 }
 
+/// A symbolic representation of a boolean value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SymbolicBoolean {
+  ANY,
+  TRUE,
+  FALSE,
+  INVALID,
+}
+
+impl SymbolicBoolean {
+  fn or(self, other: Self) -> Self {
+    if self == other {
+      self
+    } else if self == Self::INVALID {
+      other
+    } else if other == Self::INVALID {
+      self
+    } else {
+      Self::ANY
+    }
+  }
+
+  fn and(self, other: Self) -> Self {
+    if self == other {
+      self
+    } else if self == Self::ANY {
+      other
+    } else if other == Self::ANY {
+      self
+    } else {
+      Self::INVALID
+    }
+  }
+
+  fn is_single(self) -> bool {
+    self == Self::TRUE || self == Self::FALSE
+  }
+}
+
 /// Tracking information for each value.
 /// We keep track of whether each equals op-code evaluated to true or false
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct BreadCrumb {
   /// The output of each equal operand
-  /// posn = equal_idx * INPUT_VALUES + value
-  /// If the option is None, it means that no bits are set.
-  crumbs: Option<BitVec>,
-  num_variables: usize,
+  /// Values past the end of the vector are SymbolicValue::ANY.
+  crumbs: Vec<SymbolicBoolean>,
 }
 
 impl BreadCrumb {
-  /// The number of potential values for each input.
-  const INPUT_VALUES: usize = 2;
-
   fn init(num_variables: usize) -> Self {
-    BreadCrumb{crumbs: None, num_variables}
+    BreadCrumb{crumbs: Vec::with_capacity(num_variables)}
   }
 
-  fn set(&mut self, equal_idx: usize, value: i64) {
-    assert!(value >= 0 && value < Self::INPUT_VALUES as i64);
-    if self.crumbs.is_none() {
-      self.crumbs = Some(BitVec::repeat(false, self.num_variables * Self::INPUT_VALUES));
+  fn set(&mut self, equal_idx: usize, value: bool) {
+    while self.crumbs.len() <= equal_idx {
+      self.crumbs.push(SymbolicBoolean::ANY);
     }
-    let vec: &mut BitVec = self.crumbs.as_mut().unwrap();
-    vec.set(equal_idx * Self::INPUT_VALUES + value as usize, true);
+    self.crumbs[equal_idx] =
+      if value { SymbolicBoolean::TRUE } else { SymbolicBoolean::FALSE };
   }
 
-  fn or(&mut self, other: &Self) -> &mut Self {
-    if let Some(other_crumbs) = &other.crumbs {
-      if let Some(crumbs) = &mut self.crumbs {
-        *crumbs |= other_crumbs;
-      } else {
-        self.crumbs = Some(other_crumbs.clone());
-      }
+  /// Ors the other into self.
+  fn or(&mut self, other: &Self) -> &mut Self{
+    let both = usize::min(self.crumbs.len(), other.crumbs.len());
+    self.crumbs.reserve(other.crumbs.len() - both);
+    for i in 0..both {
+      self.crumbs[i] = self.crumbs[i].or(other.crumbs[i]);
+    }
+    // handle the extra values in self
+    for i in both..self.crumbs.len() {
+      self.crumbs[i] = SymbolicBoolean::ANY.or(self.crumbs[i]);
+    }
+    // handle the extra values in other
+    for i in both..other.crumbs.len() {
+      self.crumbs.push(SymbolicBoolean::ANY.or(other.crumbs[i]));
     }
     self
   }
 
-  fn count_ones(&self) -> usize {
-    match &self.crumbs {
-      None => 0,
-      Some(c) => c.count_ones(),
+  /// Ands the other into self.
+  fn and(&mut self, other: &Self) -> &mut Self {
+    let both = usize::min(self.crumbs.len(), other.crumbs.len());
+    self.crumbs.reserve(other.crumbs.len() - both);
+    for i in 0..both {
+      self.crumbs[i] = self.crumbs[i].and(other.crumbs[i]);
     }
+    // The extra values in self don't change and the extra ones in other are copied.
+    // ANY.and(x) -> x
+    for i in both..other.crumbs.len() {
+      self.crumbs.push(other.crumbs[i]);
+    }
+    self
+  }
+
+  /// Is this a valid value?
+  fn is_valid(&self) -> bool {
+    self.crumbs.iter().find(|&v| *v == SymbolicBoolean::INVALID).is_none()
   }
 }
 
 impl Display for BreadCrumb {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let parts: Vec<String>;
-    match &self.crumbs {
-      None => parts = vec![],
-      Some(vec) => {
-        parts = (0 .. self.num_variables)
-          .filter_map(|eql| {
-            let slice = &vec[eql * BreadCrumb::INPUT_VALUES..
-              (eql + 1) * BreadCrumb::INPUT_VALUES];
-            if slice.not_any() {
-              None
-            } else {
-              Some(format!("eql_{}: {{{}}}", eql,
-                           slice.iter().enumerate().filter(|(_, i)| **i)
-                             .map(|(v, _) | v.to_string())
-                             .collect::<Vec<String>>().join(", ")))
-            }
-          }).collect();
-      }
-    }
+    let parts: Vec<String> = self.crumbs.iter().enumerate()
+      .filter(|(_, &v)| v != SymbolicBoolean::ANY)
+      .map(|(i,v)| format!("eql_{}: {:?}", i, v))
+      .collect();
     write!(f, "{}", parts.join("; "))
   }
 }
@@ -267,9 +303,9 @@ struct SymbolicValue {
 }
 
 impl SymbolicValue {
-  fn literal(num_variables: usize, x: i64) -> Self {
+  fn literal(x: i64) -> Self {
     let mut values = HashMap::default();
-    values.insert(x, BreadCrumb::init(num_variables));
+    values.insert(x, BreadCrumb::init(0));
     Self{values}
   }
 
@@ -301,7 +337,7 @@ impl SymbolicState {
     let mut result = Self::default();
     result.equals_posn = equals_posn.into();
     let zero = Rc::new(
-      SymbolicValue::literal(equals_posn.len(), 0));
+      SymbolicValue::literal(0));
     for sv in result.register.iter_mut() {
       *sv = zero.clone();
     }
@@ -312,7 +348,7 @@ impl SymbolicState {
     match opd {
       Operand::Register(reg) => self.register[reg.index()].clone(),
       Operand::Value(x) => Rc::new(
-        SymbolicValue::literal(self.equals_posn.len(), *x)),
+        SymbolicValue::literal(*x)),
     }
   }
 
@@ -320,7 +356,7 @@ impl SymbolicState {
   fn do_input(&self) -> Rc<SymbolicValue> {
     // generate all values from 1 to 9
     Rc::new(SymbolicValue{values: (1 ..= 9)
-        .map(|v| (v, BreadCrumb::init(self.equals_posn.len())))
+        .map(|v| (v, BreadCrumb::init(0)))
         .collect()})
   }
 
@@ -331,15 +367,11 @@ impl SymbolicState {
     for (left_val, left_descr) in &left.values {
       for (right_val, right_descr) in &right.values {
         let total_val = left_val + right_val;
+        let mut total_descr = left_descr.clone();
+        total_descr.and(right_descr);
         match result.values.get_mut(&total_val) {
-          Some(total_descr) => {
-            total_descr.or(&left_descr).or(&right_descr);
-          },
-          None => {
-            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
-            total_descr.or(&left_descr).or(&right_descr);
-            result.values.insert(total_val, total_descr);
-          },
+          Some(old_descr) => { old_descr.or(&total_descr); },
+          None => { result.values.insert(total_val, total_descr); },
         }
       }
     }
@@ -352,27 +384,23 @@ impl SymbolicState {
     let mut result = SymbolicValue::default();
     for (&left_val, left_descr) in &left.values {
       for (&right_val, right_descr) in &right.values {
-        let mut total_descr = BreadCrumb::init(self.equals_posn.len());
-        if left_val != 0 {
-          total_descr.or(right_descr);
-        }
-        if right_val != 0 {
-          total_descr.or(left_descr);
-        } else if left_val == 0 {
-          if left_descr.count_ones() > right_descr.count_ones() {
-            total_descr.or(right_descr);
-          } else {
-            total_descr.or(left_descr);
-          }
-        }
         let total_val = left_val * right_val;
+        let mut total_descr;
+        // depending on the zeros, figure out the requirements
+        if left_val == 0 && right_val == 0 {
+          total_descr = left_descr.clone();
+          total_descr.or(right_descr);
+        } else if left_val == 0 {
+          total_descr = left_descr.clone();
+        } else if right_val == 0 {
+          total_descr = right_descr.clone();
+        } else {
+          total_descr = left_descr.clone();
+          total_descr.and(right_descr);
+        }
         match result.values.get_mut(&total_val) {
-          Some(old_descr) => {
-            old_descr.or(&total_descr);
-          },
-          None => {
-            result.values.insert(total_val, total_descr);
-          },
+          Some(old_descr) => { old_descr.or(&total_descr); },
+          None => { result.values.insert(total_val, total_descr); },
         }
       }
     }
@@ -383,18 +411,17 @@ impl SymbolicState {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
-    for (left_val, left_descr) in &left.values {
-      for (right_val, right_descr) in &right.values {
+    for (&left_val, left_descr) in &left.values {
+      for (&right_val, right_descr) in &right.values {
         let total_val = left_val / right_val;
+        let mut total_descr = left_descr.clone();
+        // If the left value is 0, we don't care about the right
+        if left_val != 0 {
+          total_descr.and(right_descr);
+        }
         match result.values.get_mut(&total_val) {
-          Some(total_descr) => {
-            total_descr.or(&left_descr).or(&right_descr);
-          },
-          None => {
-            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
-            total_descr.or(&left_descr).or(&right_descr);
-            result.values.insert(total_val, total_descr);
-          },
+          Some(old_descr) => { old_descr.or(&total_descr); },
+          None => { result.values.insert(total_val, total_descr); },
         }
       }
     }
@@ -405,18 +432,17 @@ impl SymbolicState {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
-    for (left_val, left_descr) in &left.values {
-      for (right_val, right_descr) in &right.values {
+    for (&left_val, left_descr) in &left.values {
+      for (&right_val, right_descr) in &right.values {
         let total_val = left_val % right_val;
+        let mut total_descr = left_descr.clone();
+        // If the left value is 0, we don't care about the right
+        if left_val != 0 {
+          total_descr.and(right_descr);
+        }
         match result.values.get_mut(&total_val) {
-          Some(total_descr) => {
-            total_descr.or(&left_descr).or(&right_descr);
-          },
-          None => {
-            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
-            total_descr.or(&left_descr).or(&right_descr);
-            result.values.insert(total_val, total_descr);
-          },
+          Some(old_descr) => { old_descr.or(&total_descr); },
+          None => { result.values.insert(total_val, total_descr); },
         }
       }
     }
@@ -429,22 +455,18 @@ impl SymbolicState {
     let mut result = SymbolicValue::default();
     for (left_val, left_descr) in &left.values {
       for (right_val, right_descr) in &right.values {
-        let total_val = if left_val == right_val {1} else {0};
+        let total_val = if left_val == right_val { 1 } else { 0 };
+        let mut total_descr = left_descr.clone();
+        total_descr.and(right_descr);
         match result.values.get_mut(&total_val) {
-          Some(total_descr) => {
-            total_descr.or(&left_descr).or(&right_descr);
-          },
-          None => {
-            let mut total_descr = BreadCrumb::init(self.equals_posn.len());
-            total_descr.or(&left_descr).or(&right_descr);
-            result.values.insert(total_val, total_descr);
-          },
+          Some(old_descr) => { old_descr.or(&total_descr); },
+          None => { result.values.insert(total_val, total_descr); },
         }
       }
     }
     let eq_idx = self.equals_posn.iter().position(|&x| x == self.pc).unwrap();
     for (&val, descr) in result.values.iter_mut() {
-      descr.set(eq_idx, val);
+      descr.set(eq_idx, val == 1);
     }
     Rc::new(result)
   }
@@ -520,17 +542,18 @@ mod tests {
   }
 
   #[test]
-  fn test_input_alternative() {
+  fn test_breadcrumbs() {
     let mut descr = BreadCrumb::init(14);
-    descr.set(1, 0);
-    assert_eq!("eql_1: {0}", descr.to_string());
-    descr.set(1, 1);
-    descr.set(4, 1);
-    assert_eq!("eql_1: {0, 1}; eql_4: {1}", descr.to_string());
+    descr.set(1, false);
+    assert_eq!("eql_1: FALSE", descr.to_string());
+    descr.set(2, false);
+    descr.set(4, true);
+    assert_eq!("eql_1: FALSE; eql_2: FALSE; eql_4: TRUE", descr.to_string());
     let mut descr2 = BreadCrumb::init(14);
-    descr2.set(2, 1);
-    descr.or(&descr2);
-    assert_eq!("eql_1: {0, 1}; eql_2: {1}; eql_4: {1}", descr.to_string());
+    descr2.set(2, true);
+    assert_eq!("eql_2: TRUE", descr2.to_string());
+    descr.and(&descr2);
+    assert_eq!("eql_1: FALSE; eql_2: INVALID; eql_4: TRUE", descr.to_string());
   }
 
   #[test]
