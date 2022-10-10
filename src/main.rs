@@ -149,12 +149,6 @@ impl Display for Operation {
   }
 }
 
-fn find_equals(program: &[Operation]) -> Vec<usize> {
-  program.iter().enumerate().filter(|(_, op)| matches!(op, Operation::Equal(_, _, _)))
-    .map(|(i, _) | i)
-    .collect()
-}
-
 trait Environment {
   fn get_input(&self, id: usize) -> Vec<i64>;
   fn should_abandon(&self, op: &Operation, result: i64) -> bool;
@@ -202,9 +196,10 @@ impl State {
         child_state.inputs.push(input);
         child_state.register[reg.index()] = input;
         child_state.pc += 1;
-        child_state.execute(program, env)?;
-        *self = child_state;
-        return Ok(())
+        if child_state.execute(program, env).is_ok() {
+          *self = child_state;
+          return Ok(())
+        }
       }
     }
     Err("Input exhausted".to_string())
@@ -396,23 +391,17 @@ impl Display for SymbolicValue {
   }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct SymbolicState {
-  equals_posn: Vec<usize>,
   pc: usize,
   register: [Rc<SymbolicValue>; Register::SIZE],
 }
 
 impl SymbolicState {
-  fn init(equals_posn: &[usize]) -> Self {
-    let mut result = Self::default();
-    result.equals_posn = equals_posn.into();
-    let zero = Rc::new(
-      SymbolicValue::literal(0));
-    for sv in result.register.iter_mut() {
-      *sv = zero.clone();
-    }
-    result
+  fn default() -> Self {
+    let zero = Rc::new(SymbolicValue::literal(0));
+    let register: [Rc<SymbolicValue>; Register::SIZE] = [(); Register::SIZE].map(|_| zero.clone());
+    SymbolicState{pc: 0, register}
   }
 
   fn get_value(&self, opd: &Operand) -> Rc<SymbolicValue> {
@@ -520,7 +509,7 @@ impl SymbolicState {
     Rc::new(result)
   }
 
-  fn do_equals(&self, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
+  fn do_equals(&self, id: usize, reg: &Register, opd: &Operand) -> Rc<SymbolicValue> {
     let left = &self.register[reg.index()];
     let right = self.get_value(opd);
     let mut result = SymbolicValue::default();
@@ -536,9 +525,8 @@ impl SymbolicState {
       }
     }
     // Set the bread crumb for which branch was taken
-    let eq_idx = self.equals_posn.iter().position(|&x| x == self.pc).unwrap();
     for (&val, descr) in result.values.iter_mut() {
-      descr.set(eq_idx, val == 1);
+      descr.set(id, val == 1);
     }
     Rc::new(result)
   }
@@ -558,8 +546,8 @@ impl SymbolicState {
           self.register[reg.index()] = self.do_divide(reg, operand),
         Operation::Modulo(reg, operand) =>
           self.register[reg.index()] = self.do_modulo(reg, operand),
-        Operation::Equal(_, reg, operand) =>
-          self.register[reg.index()] = self.do_equals(reg, operand),
+        Operation::Equal(id, reg, operand) =>
+          self.register[reg.index()] = self.do_equals(*id, reg, operand),
       }
       self.pc += 1;
       self.evaluate(&program[1..])
@@ -567,10 +555,34 @@ impl SymbolicState {
   }
 }
 
+/// An environment that tries each input value, but has
+/// constraints on the results of equals.
+struct ConstrainedEnvironment {
+  constraint: Vec<Option<bool>>,
+}
+
+impl Environment for ConstrainedEnvironment {
+  fn get_input(&self, _: usize) -> Vec<i64> {
+    (1..=9).rev().collect()
+  }
+
+  fn should_abandon(&self, op: &Operation, result: i64) -> bool {
+    if let Operation::Equal(id, _, _) = op {
+      if *id < self.constraint.len() {
+        if let Some(required) = self.constraint[*id] {
+          if required != (result == 1) {
+            return true
+          }
+        }
+      }
+    }
+    false
+  }
+}
+
 fn main() {
   let program = Operation::parse_file("input24.txt").unwrap();
-  let equals_posn =  find_equals(&program);
-  let mut state = SymbolicState::init(&equals_posn);
+  let mut state = SymbolicState::default();
   state.evaluate(&program);
   match state.register[Register::Z.index()].values.get(&0) {
     Some(sol) => println!("Solution = {}", sol),
@@ -580,7 +592,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{BreadCrumb, Operand, Operation, Register, SimpleEnvironment, State, SymbolicState};
+  use crate::{BreadCrumb, ConstrainedEnvironment, Operand, Operation, Register, SimpleEnvironment, State, SymbolicState};
 
   #[test]
   fn test_little_execution() {
@@ -616,6 +628,23 @@ mod tests {
   }
 
   #[test]
+  fn test_constrained_execution() {
+    let text = vec!{
+      "inp w",
+      "mul w 10",
+      "inp x",
+      "add w x",
+      "add y w",
+      "eql y 56"};
+    let program = Operation::parse(&mut text.iter()
+      .map(|l| Ok(l.to_string()))).unwrap();
+    let env = ConstrainedEnvironment{constraint: vec!{Some(true)}};
+    let mut state = State::default();
+    assert!(state.execute(&program, &env).is_ok());
+    assert_eq!([56, 6, 1, 0], state.register);
+  }
+
+  #[test]
   fn test_breadcrumbs() {
     let mut descr = BreadCrumb::init(14);
     descr.set(1, false);
@@ -632,7 +661,7 @@ mod tests {
 
   #[test]
   fn test_symbolic() {
-    let mut state = SymbolicState::init(&Vec::new());
+    let mut state = SymbolicState::default();
     state.register[0] = state.do_input();
     state.register[1] = state.do_input();
     state.register[2] = state.do_add(&Register::W, &Operand::Register(Register::X));
@@ -645,7 +674,7 @@ mod tests {
   #[test]
   fn test_symbolic_little() {
     let program = Operation::parse_file("little.txt").unwrap();
-    let mut state = SymbolicState::init(&Vec::new());
+    let mut state = SymbolicState::default();
     state.evaluate(&program);
     assert_eq!(vec![0, 1], state.register[0].values());
     assert_eq!(vec![0, 1], state.register[3].values());
