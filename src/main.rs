@@ -79,37 +79,38 @@ enum Operation {
   Multiply(Register, Operand),
   Divide(Register, Operand),
   Modulo(Register, Operand),
-  Equal(Register, Operand),
+  Equal(usize, Register, Operand),
 }
 
 impl Operation {
-  fn parse_statement(line: &str, next_input: &mut usize) -> io::Result<Self> {
+  fn parse_statement(line: &str,
+                     next_input: &mut dyn Iterator<Item=usize>,
+                     next_equal: &mut dyn Iterator<Item=usize>) -> io::Result<Self> {
     let words: Vec<String> = line.split_ascii_whitespace()
         .map(|x| String::from(x)).collect();
     let register = Register::parse(&words[1])?;
     match words[0].as_str() {
-      "inp" => {
-        let id = *next_input;
-        *next_input += 1;
-        Ok(Self::Input(id, register))
-      },
+      "inp" => Ok(Self::Input(next_input.next().unwrap(), register)),
       "add" => Ok(Self::Add(register, Operand::parse(&words[2])?)),
       "mul" => Ok(Self::Multiply(register, Operand::parse(&words[2])?)),
       "div" => Ok(Self::Divide(register, Operand::parse(&words[2])?)),
       "mod" => Ok(Self::Modulo(register, Operand::parse(&words[2])?)),
-      "eql" => Ok(Self::Equal(register, Operand::parse(&words[2])?)),
+      "eql" => Ok(Self::Equal(next_equal.next().unwrap(),
+                              register, Operand::parse(&words[2])?)),
       _ => Err(Error::new(ErrorKind::Other, format!("Unknown operator {}", words[0]))),
     }
   }
 
   fn parse(lines: &mut dyn Iterator<Item=io::Result<String>>) -> io::Result<Vec<Self>> {
-    let mut next_input = 0;
+    let mut next_input = 0..usize::MAX;
+    let mut next_equal = 0..usize::MAX;
     let mut result = Vec::new();
     for l in lines {
       match l {
         Ok(s) => {
           if s.len() > 0 {
-            result.push(Self::parse_statement(&s, &mut next_input)?)
+            result.push(Self::parse_statement(&s, &mut next_input,
+                                              &mut next_equal)?);
           }
         },
         Err(e) => return Err(e),
@@ -122,38 +123,71 @@ impl Operation {
     let file = File::open(filename)?;
     Self::parse(&mut io::BufReader::new(file).lines())
   }
+
+  fn get_register(&self) -> &Register {
+    match self {
+      Operation::Input(_, reg) => reg,
+      Operation::Add(reg, _) => reg,
+      Operation::Multiply(reg, _) => reg,
+      Operation::Divide(reg, _) => reg,
+      Operation::Modulo(reg, _) => reg,
+      Operation::Equal(_, reg, _) => reg,
+    }
+  }
 }
 
 impl Display for Operation {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self {
-      Operation::Input(idx, reg) => write!(f, "inp({}, {})", idx, reg),
+      Operation::Input(idx, reg) => write!(f, "inp_{}({})", idx, reg),
       Operation::Add(left, right) => write!(f, "add({}, {})", left, right),
       Operation::Multiply(left, right) => write!(f, "mul({}, {})", left, right),
       Operation::Divide(left, right) => write!(f, "div({}, {})", left, right),
       Operation::Modulo(left, right) => write!(f, "mod({}, {})", left, right),
-      Operation::Equal(left, right) => write!(f, "eql({}, {})", left, right),
+      Operation::Equal(idx, left, right) => write!(f, "eql_{}({}, {})", idx, left, right),
     }
   }
 }
 
 fn find_equals(program: &[Operation]) -> Vec<usize> {
-  program.iter().enumerate().filter(|(_, op)| matches!(op, Operation::Equal(_, _)))
+  program.iter().enumerate().filter(|(_, op)| matches!(op, Operation::Equal(_, _, _)))
     .map(|(i, _) | i)
     .collect()
 }
 
+trait Environment {
+  fn get_input(&self, id: usize) -> Vec<i64>;
+  fn should_abandon(&self, op: &Operation, result: i64) -> bool;
+}
+
+// A simple environment that runs a single input
+struct SimpleEnvironment {
+  inputs: Vec<i64>,
+}
+
+impl Environment for SimpleEnvironment {
+  fn get_input(&self, id: usize) -> Vec<i64> {
+    if id < self.inputs.len() {
+      return vec!{self.inputs[id]}
+    }
+    vec!{}
+  }
+
+  fn should_abandon(&self, _: &Operation, _: i64) -> bool {
+    false
+  }
+}
+
+type ExecutionResult = Result<(), String>;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct State {
   register: [i64; Register::SIZE],
+  inputs: Vec<i64>,
+  pc: usize,
 }
 
 impl State {
-  fn init(w: i64, x: i64, y: i64, z: i64) -> Self {
-    let register = [w, x, y, z];
-    State{register}
-  }
-
   fn get_value(&self, op: &Operand) -> i64 {
     match op {
       Operand::Value(i) => *i,
@@ -161,29 +195,50 @@ impl State {
     }
   }
 
-  // Evaluate the operation in the given state and input.
-  // Updates the state.
-  fn evaluate(&mut self, program: &[Operation], input: &[i64]) -> i64 {
-    if program.len() == 0 {
-      self.register[Register::SIZE - 1]
-    } else {
-      match &program[0] {
-        Operation::Input(id, reg) =>
-          self.register[reg.index()] = input[*id],
-        Operation::Add(reg, operand) =>
-          self.register[reg.index()] = self.register[reg.index()] + self.get_value(operand),
-        Operation::Multiply(reg, operand) =>
-          self.register[reg.index()] = self.register[reg.index()] * self.get_value(operand),
-        Operation::Divide(reg, operand) =>
-          self.register[reg.index()] = self.register[reg.index()] / self.get_value(operand),
-        Operation::Modulo(reg, operand) =>
-          self.register[reg.index()] = self.register[reg.index()] % self.get_value(operand),
-        Operation::Equal(reg, operand) =>
-          self.register[reg.index()] =
-              if self.register[reg.index()] == self.get_value(operand) {1} else {0},
+  fn do_input(&mut self, program: &[Operation], env: &dyn Environment) -> ExecutionResult {
+    if let Operation::Input(id, reg) = &program[self.pc] {
+      for input in env.get_input(*id) {
+        let mut child_state = self.clone();
+        child_state.inputs.push(input);
+        child_state.register[reg.index()] = input;
+        child_state.pc += 1;
+        child_state.execute(program, env)?;
+        *self = child_state;
+        return Ok(())
       }
-      self.evaluate(&program[1..], input)
     }
+    Err("Input exhausted".to_string())
+  }
+
+  /// Evaluate the program given an environment.
+  /// Mutates the state.
+  fn execute(&mut self, program: &[Operation], env: & dyn Environment) -> ExecutionResult {
+    while self.pc < program.len() {
+      let result: i64;
+      let statement = &program[self.pc];
+      match statement {
+        Operation::Input(_, _) => {
+          self.do_input(program, env)?;
+          continue
+        }
+        Operation::Add(reg, operand) =>
+          result = self.register[reg.index()] + self.get_value(operand),
+        Operation::Multiply(reg, operand) =>
+          result = self.register[reg.index()] * self.get_value(operand),
+        Operation::Divide(reg, operand) =>
+          result = self.register[reg.index()] / self.get_value(operand),
+        Operation::Modulo(reg, operand) =>
+          result = self.register[reg.index()] % self.get_value(operand),
+        Operation::Equal(_, reg, operand) =>
+          result = if self.register[reg.index()] == self.get_value(operand) {1} else {0},
+      }
+      self.register[statement.get_register().index()] = result;
+      if env.should_abandon(statement, result) {
+        return Err(statement.to_string() + " abandoned")
+      }
+      self.pc += 1;
+    }
+    Ok(())
   }
 }
 
@@ -221,8 +276,13 @@ impl SymbolicBoolean {
     }
   }
 
-  fn is_single(self) -> bool {
-    self == Self::TRUE || self == Self::FALSE
+  /// Get the value, if it is unique.
+  fn get_single(self) -> Option<bool> {
+    match self {
+      Self::TRUE => Some(true),
+      Self::FALSE => Some(false),
+      _ => None,
+    }
   }
 }
 
@@ -230,7 +290,7 @@ impl SymbolicBoolean {
 /// We keep track of whether each equals op-code evaluated to true or false
 #[derive(Clone, Debug, Default)]
 struct BreadCrumb {
-  /// The output of each equal operand
+  /// The output of each equals operator
   /// Values past the end of the vector are SymbolicValue::ANY.
   crumbs: Vec<SymbolicBoolean>,
 }
@@ -240,6 +300,8 @@ impl BreadCrumb {
     BreadCrumb{crumbs: Vec::with_capacity(num_variables)}
   }
 
+  /// Replaces the previous value for that location with the given
+  /// value.
   fn set(&mut self, equal_idx: usize, value: bool) {
     while self.crumbs.len() <= equal_idx {
       self.crumbs.push(SymbolicBoolean::ANY);
@@ -285,6 +347,14 @@ impl BreadCrumb {
   fn is_valid(&self) -> bool {
     self.crumbs.iter().find(|&v| *v == SymbolicBoolean::INVALID).is_none()
   }
+
+  /// Build the list of constraints that lead to the right answer.
+  /// If a position is Some, that equals operator must have that result.
+  fn get_constraint(&self) -> Vec<Option<bool>> {
+    self.crumbs.iter()
+      .map(|&v| v.get_single())
+      .collect()
+  }
 }
 
 impl Display for BreadCrumb {
@@ -299,6 +369,7 @@ impl Display for BreadCrumb {
 
 #[derive(Clone, Debug, Default)]
 struct SymbolicValue {
+  // for each value, track the constraints that got us there
   values: HashMap<i64, BreadCrumb>,
 }
 
@@ -464,6 +535,7 @@ impl SymbolicState {
         }
       }
     }
+    // Set the bread crumb for which branch was taken
     let eq_idx = self.equals_posn.iter().position(|&x| x == self.pc).unwrap();
     for (&val, descr) in result.values.iter_mut() {
       descr.set(eq_idx, val == 1);
@@ -486,7 +558,7 @@ impl SymbolicState {
           self.register[reg.index()] = self.do_divide(reg, operand),
         Operation::Modulo(reg, operand) =>
           self.register[reg.index()] = self.do_modulo(reg, operand),
-        Operation::Equal(reg, operand) =>
+        Operation::Equal(_, reg, operand) =>
           self.register[reg.index()] = self.do_equals(reg, operand),
       }
       self.pc += 1;
@@ -508,7 +580,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-  use crate::{BreadCrumb, Operand, Operation, Register, State, SymbolicState};
+  use crate::{BreadCrumb, Operand, Operation, Register, SimpleEnvironment, State, SymbolicState};
 
   #[test]
   fn test_little_execution() {
@@ -526,19 +598,21 @@ mod tests {
       "mod w 2"};
     let program = Operation::parse(&mut text.iter()
       .map(|l| Ok(l.to_string()))).unwrap();
-    let input = vec![9];
+    let inputs = vec![9];
     let mut state = State::default();
-    state.evaluate(&program, &input);
-    assert_eq!(State::init(1,0,0,1), state);
+    let env = SimpleEnvironment{inputs};
+    assert!(state.execute(&program, &env).is_ok());
+    assert_eq!([1, 0, 0, 1], state.register);
   }
 
   #[test]
   fn test_execution() {
     let program = Operation::parse_file("input24.txt").unwrap();
-    let input = vec![3,9,9,9,9,6,9,8,7,9,9,4,2,9];
+    let inputs = vec![3,9,9,9,9,6,9,8,7,9,9,4,2,9];
+    let env = SimpleEnvironment{inputs};
     let mut state = State::default();
-    state.evaluate(&program, &input);
-    assert_eq!(State::init(9, 0, 0, 0), state);
+    assert!(state.execute(&program, &env).is_ok());
+    assert_eq!([9, 0, 0, 0], state.register);
   }
 
   #[test]
