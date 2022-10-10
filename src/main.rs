@@ -149,8 +149,11 @@ impl Display for Operation {
   }
 }
 
+/// Provide an environment to run literal values.
 trait Environment {
+  /// The list of ordered values to use for a given input.
   fn get_input(&self, id: usize) -> Vec<i64>;
+  /// Whether to stop the search at this point
   fn should_abandon(&self, op: &Operation, result: i64) -> bool;
 }
 
@@ -336,11 +339,6 @@ impl BreadCrumb {
       self.crumbs.push(other.crumbs[i]);
     }
     self
-  }
-
-  /// Is this a valid value?
-  fn is_valid(&self) -> bool {
-    self.crumbs.iter().find(|&v| *v == SymbolicBoolean::INVALID).is_none()
   }
 
   /// Build the list of constraints that lead to the right answer.
@@ -582,11 +580,19 @@ impl Environment for ConstrainedEnvironment {
 
 fn main() {
   let program = Operation::parse_file("input24.txt").unwrap();
-  let mut state = SymbolicState::default();
-  state.evaluate(&program);
-  match state.register[Register::Z.index()].values.get(&0) {
-    Some(sol) => println!("Solution = {}", sol),
-    None => println!("Nothing!"),
+  let mut symbol_state = SymbolicState::default();
+  symbol_state.evaluate(&program);
+  if let Some(crumb) = symbol_state.register[Register::Z.index()].values.get(&0) {
+    let mut state = State::default();
+    let constraint = crumb.get_constraint();
+    let result = state.execute(&program, &ConstrainedEnvironment{constraint});
+    if result.is_ok() {
+      println!("Answer: {:?}", state.inputs);
+    } else {
+      println!("Failure: {}", result.err().unwrap());
+    }
+  } else {
+    println!("No solution found!")
   }
 }
 
@@ -627,6 +633,7 @@ mod tests {
     assert_eq!([9, 0, 0, 0], state.register);
   }
 
+  /// Use two inputs and find the inputs that make the equals true.
   #[test]
   fn test_constrained_execution() {
     let text = vec!{
