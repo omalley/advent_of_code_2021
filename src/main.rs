@@ -155,6 +155,8 @@ trait Environment {
   fn get_input(&self, id: usize) -> Vec<i64>;
   /// Whether to stop the search at this point
   fn should_abandon(&self, op: &Operation, result: i64) -> bool;
+  /// Is this a valid end state?
+  fn can_finish(&self, state: &State) -> bool;
 }
 
 // A simple environment that runs a single input
@@ -172,6 +174,10 @@ impl Environment for SimpleEnvironment {
 
   fn should_abandon(&self, _: &Operation, _: i64) -> bool {
     false
+  }
+
+  fn can_finish(&self, _: &State) -> bool {
+    true
   }
 }
 
@@ -236,7 +242,11 @@ impl State {
       }
       self.pc += 1;
     }
-    Ok(())
+    if env.can_finish(self) {
+      Ok(())
+    } else {
+      Err("Final state not accepted".to_string())
+    }
   }
 }
 
@@ -575,6 +585,10 @@ impl Environment for ConstrainedEnvironment {
       }
     }
     false
+  }
+
+  fn can_finish(&self, state: &State) -> bool {
+    state.register[Register::Z.index()] == 0
   }
 }
 
