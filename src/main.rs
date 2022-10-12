@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io;
 use std::io::{BufRead, Error, ErrorKind};
 use std::rc::Rc;
+use std::time::Instant;
 
 #[derive (Debug)]
 enum Register {
@@ -567,11 +568,16 @@ impl SymbolicState {
 /// constraints on the results of equals.
 struct ConstrainedEnvironment {
   constraint: Vec<Option<bool>>,
+  is_descending: bool,
 }
 
 impl Environment for ConstrainedEnvironment {
   fn get_input(&self, _: usize) -> Vec<i64> {
-    (1..=9).rev().collect()
+    if self.is_descending {
+      (1..=9).rev().collect()
+    } else {
+      (1..=9).collect()
+    }
   }
 
   fn should_abandon(&self, op: &Operation, result: i64) -> bool {
@@ -592,22 +598,43 @@ impl Environment for ConstrainedEnvironment {
   }
 }
 
-fn main() {
-  let program = Operation::parse_file("input24.txt").unwrap();
+fn compute_symbolic(program: &[Operation]) -> (Vec<Option<bool>>, f64) {
+  let start = Instant::now();
   let mut symbol_state = SymbolicState::default();
   symbol_state.evaluate(&program);
   if let Some(crumb) = symbol_state.register[Register::Z.index()].values.get(&0) {
-    let mut state = State::default();
     let constraint = crumb.get_constraint();
-    let result = state.execute(&program, &ConstrainedEnvironment{constraint});
-    if result.is_ok() {
-      println!("Answer: {:?}", state.inputs);
-    } else {
-      println!("Failure: {}", result.err().unwrap());
-    }
-  } else {
-    println!("No solution found!")
+    let end = Instant::now();
+    return (constraint, end.duration_since(start).as_secs_f64());
   }
+  panic!("Can't find symbolic solution");
+}
+
+fn find_answer(program: &[Operation],
+               constraint: &Vec<Option<bool>>,
+               is_descending: bool) -> (Vec<i64>, f64) {
+  let start = Instant::now();
+  let env = ConstrainedEnvironment{constraint: (*constraint).clone(), is_descending};
+  let mut state = State::default();
+  match state.execute(&program,&env) {
+    Ok(_) => return (state.inputs,
+                     Instant::now().duration_since(start).as_secs_f64()),
+    Err(err) => panic!("Failed to find answer: {}", err),
+  }
+}
+
+fn main() {
+  let program = Operation::parse_file("input24.txt").unwrap();
+  let (constraint, symbolic_time) = compute_symbolic(&program);
+  let (part_a, a_time) = find_answer(&program, &constraint, true);
+  let (part_b, b_time) = find_answer(&program, &constraint, false);
+
+  println!("symbolic: {} sec", symbolic_time);
+  println!("desc search: {} sec", a_time);
+  println!("asc search: {} sec", b_time);
+
+  println!("desc answer: {:?}", part_a);
+  println!("asc answer: {:?}", part_b);
 }
 
 #[cfg(test)]
@@ -659,7 +686,7 @@ mod tests {
       "eql y 56"};
     let program = Operation::parse(&mut text.iter()
       .map(|l| Ok(l.to_string()))).unwrap();
-    let env = ConstrainedEnvironment{constraint: vec!{Some(true)}};
+    let env = ConstrainedEnvironment{constraint: vec!{Some(true)}, is_descending: true};
     let mut state = State::default();
     assert!(state.execute(&program, &env).is_ok());
     assert_eq!([56, 6, 1, 0], state.register);
