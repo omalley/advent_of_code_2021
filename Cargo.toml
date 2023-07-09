@@ -1,11 +1,47 @@
 [package]
-name = "advent_21"
-version = "0.1.0"
+name = "omalley-aoc2021"
+version = "0.0.1"
+authors = ["Owen O'Malley <omalley@apache.org>"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "GPL"
+homepage = "https://github.com/omalley/advent_of_code_2021"
+repository = "https://github.com/omalley/advent_of_code_2021"
+keywords = ["aoc", "advent", "example"]
+description = "Solutions to AoC 2021"
 
 [dependencies]
-strum = "0.23.0"
-strum_macros = "0.23.1"
-priority-queue = "1.2.1"
+argh = "0.1"
+colored = "2"
+itertools = "0.10"
+priority-queue = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+strum = "0.24"
+strum_macros = "0.24"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[profile.test]
+opt-level = 3
+
+# The "debug" profile
+[profile.release]
+panic = "abort"
+debug = true
+lto = "thin"
+
+# The profile to benchmark with (`cargo run --profile benchmark`)
+[profile.benchmark]
+inherits = "release"
+debug = false
+lto = "fat"
+
+[profile.bench]
+inherits = "release"
+debug = false
+lto = "fat"
+
+[[bench]]
+name = "bench"
+harness = false

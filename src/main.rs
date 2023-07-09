@@ -1,99 +1,83 @@
-use std::io;
-use std::io::BufRead;
+use std::collections::BTreeMap;
+use argh::FromArgs;
+use colored::Colorize;
+use omalley_aoc2021::{DayResult,FUNCS,INPUTS,NAMES,time};
+use serde::{Deserialize,Serialize};
 
-#[derive(Clone,Copy,Debug)]
-struct Location {
-  x: usize,
-  y: usize,
+#[derive(FromArgs)]
+/** Solution for Advent of Code (https://adventofcode.com/)*/
+struct Args {
+  /// A single day to execute (all days by default)
+  #[argh(option, short = 'd')]
+  day: Option<usize>,
 }
 
-#[derive(Debug)]
-struct State {
-  is_occupied: Vec<Vec<bool>>,
-  east_facing: Vec<Location>,
-  south_facing: Vec<Location>,
-  width: usize,
-  height: usize,
+#[derive(Default,Deserialize,Serialize)]
+struct Answers {
+  // map from day name to answers
+  days: BTreeMap<String,Vec<String>>,
 }
 
-impl State {
-  fn parse(input: &mut dyn Iterator<Item = String>) -> State {
-    let mut result = State{is_occupied: Vec::new(), east_facing: Vec::new(),
-                           south_facing: Vec::new(), width: 0, height: 0};
-    let mut first = true;
-    for line in input {
-      if first {
-        first = false;
-        result.width = line.chars().count();
-      }
-      result.is_occupied.push(vec![false; result.width]);
-      let y = result.height;
-      let mut x = 0;
-      for ch in line.chars() {
-        match ch {
-          '>' => {
-            result.is_occupied[y][x] = true;
-            result.east_facing.push(Location{x, y});
-          }
-          'v' => {
-            result.is_occupied[y][x] = true;
-            result.south_facing.push(Location{x, y});
-          }
-          _ => {}
+impl Answers {
+  const FILENAME: &'static str = "answers.yml";
+
+  fn read() -> Self {
+    if let Ok(f) = std::fs::File::open(Self::FILENAME) {
+      serde_yaml::from_reader(f).expect("Could not read answers")
+    } else {
+      Self::default()
+    }
+  }
+
+  fn update(&mut self, delta_list: &Vec<DayResult>) {
+    for delta in delta_list {
+      let new_val = delta.get_answers();
+      if let Some(prev) =
+          self.days.insert(delta.day.to_string(), new_val.clone()) {
+        if prev != new_val {
+          println!("{}", format!("Output for {} changed from {:?} to {:?}!",
+                                 delta.pretty_day(), prev, new_val).bold());
         }
-        x += 1;
       }
-      result.height += 1;
     }
-    result
   }
 
-  fn move_east(&mut self) -> usize {
-    let mut moved: Vec<usize> = Vec::with_capacity(self.east_facing.len());
-    for i in 0..self.east_facing.len() {
-      let posn = self.east_facing[i];
-      if !self.is_occupied[posn.y][(posn.x + 1) % self.width] {
-        moved.push(i);
-      }
-    }
-    for i in &moved {
-      let old_posn = self.east_facing[*i];
-      let new_posn = Location{x: (old_posn.x + 1) % self.width, y: old_posn.y };
-      self.east_facing[*i] = new_posn;
-      self.is_occupied[old_posn.y][old_posn.x] = false;
-      self.is_occupied[new_posn.y][new_posn.x] = true;
-    }
-    moved.len()
-  }
-
-  fn move_south(&mut self) -> usize {
-    let mut moved: Vec<usize> = Vec::with_capacity(self.south_facing.len());
-    for i in 0..self.south_facing.len() {
-      let posn = &self.south_facing[i];
-      if !self.is_occupied[(posn.y + 1) % self.height][posn.x] {
-        moved.push(i);
-      }
-    }
-    for i in &moved {
-      let old_posn = self.south_facing[*i];
-      let new_posn = Location{x: old_posn.x, y: (old_posn.y + 1) % self.height};
-      self.south_facing[*i] = new_posn;
-      self.is_occupied[old_posn.y][old_posn.x] = false;
-      self.is_occupied[new_posn.y][new_posn.x] = true;
-    }
-    moved.len()
+  fn write(&self) {
+    let f = std::fs::OpenOptions::new()
+      .write(true)
+      .create(true)
+      .truncate(true)
+      .open(Self::FILENAME)
+      .expect("Couldn't open file");
+    serde_yaml::to_writer(f, self).unwrap();
   }
 }
 
 fn main() {
-  let stdin = io::stdin();
-  let mut state: State = State::parse(&mut stdin.lock().lines()
-      .map(|x| String::from(x.unwrap().trim()))
-      .filter(|x| x.len() > 0));
-  println!("{:?}", state);
-  let mut turn = 1;
-  while state.move_east() + state.move_south() > 0 {
-    turn += 1;
-  }
-  println!("turns = {}", turn)
+    let args: Args = argh::from_env();
+    // Did the user pick a single day to run
+    let day_filter: Option<usize> = match args.day {
+        Some(day) => {
+            let name = format!("day{}", day);
+            Some(NAMES.iter().position(|x| **x == name)
+              .expect("Requested an unimplemented day"))
+        },
+        None => None
+    };
+
+     let (elapsed, results) = time(&|| {
+        crate::FUNCS.iter().enumerate()
+          .filter(|(p, _)| day_filter.is_none() || day_filter.unwrap() == *p)
+          .map(|(p, f)| f(INPUTS[p]))
+          .collect::<Vec<DayResult>>()
+    });
+
+    for r in &results {
+      println!("{}", r);
+    }
+    println!("{} {}", "Overall runtime".bold(), format!("({:.2?})", elapsed).dimmed());
+
+    let mut old_answers = Answers::read();
+    old_answers.update(&results);
+    old_answers.write();
 }
