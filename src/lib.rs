@@ -99,6 +99,7 @@ macro_rules! day_list {
 }}
 
 day_list!(
+        day23,
         day24,
         day25,
     );
