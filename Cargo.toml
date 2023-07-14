@@ -11,7 +11,9 @@ description = "Solutions to AoC 2021"
 
 [dependencies]
 argh = "0.1"
+bitreader = "0.3"
 colored = "2"
+hex = "0.4"
 itertools = "0.10"
 lazy_static = "1.4"
 priority-queue = "1.3"
